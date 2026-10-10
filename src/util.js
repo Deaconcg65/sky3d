@@ -38,7 +38,17 @@ export function sunPosition(date, lat, lon) {
   const ha = ((gmst * 15 + lon) * D2R) - ra, p = lat * D2R;
   const el = Math.asin(Math.sin(p) * Math.sin(dec) + Math.cos(p) * Math.cos(dec) * Math.cos(ha));
   const az = Math.atan2(-Math.sin(ha), Math.tan(dec) * Math.cos(p) - Math.sin(p) * Math.cos(ha));
-  return { el: el * R2D, az: (az * R2D + 360) % 360 };
+  // rise: 1 while the sun is climbing (morning), 0 while it is sinking (evening), easing through noon and midnight
+  return { el: el * R2D, az: (az * R2D + 360) % 360, rise: clamp(0.5 - Math.sin(ha) * 2, 0, 1) };
+}
+// Sunrise and sunset for the calendar day of a date (in the computer's own time zone) at a place. Either can be null near the poles.
+export function sunTimes(date, lat, lon) {
+  const d0 = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime(), H = -0.833, step = 300000;
+  const el = (ms) => sunPosition(new Date(ms), lat, lon).el - H;
+  const refine = (a, b) => { for (let i = 0; i < 20; i++) { const m = (a + b) / 2; if ((el(a) < 0) === (el(m) < 0)) a = m; else b = m; } return new Date((a + b) / 2); };
+  let rise = null, set = null, prev = el(d0);
+  for (let t = d0 + step; t <= d0 + 86400000; t += step) { const e = el(t); if (prev < 0 && e >= 0 && !rise) rise = refine(t - step, t); if (prev >= 0 && e < 0) set = refine(t - step, t); prev = e; }
+  return { rise, set };
 }
 
 export const fmtInt = (n) => Math.round(n).toLocaleString('en-US');

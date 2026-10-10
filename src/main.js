@@ -1,8 +1,8 @@
 // 3D sky channel. One page that reads the aircraft list from a readsb or dump1090 receiver and flies a camera through it.
 import * as THREE from 'three';
-import { R_EARTH, FT, KT, MI, D2R, clamp, lerp, smooth, angDiff, lerpAng, gcDist, bearing, sunPosition, fmtInt, prettyType } from './util.js';
-import { VEX, proj, setOrigin, project, localFrame, Segments, Ground, Sky, PlaneMesh, modelFor, makeLabel } from './scene.js';
-import { AIRLINES, IATA2ICAO } from './airlines.js';
+import { R_EARTH, FT, KT, MI, D2R, clamp, lerp, smooth, angDiff, lerpAng, gcDist, bearing, sunPosition, sunTimes, fmtInt, prettyType } from './util.js';
+import { VEX, proj, setOrigin, project, localFrame, Segments, Ground, Sky, WeatherLayer, PlaneMesh, modelFor, makeLabel } from './scene.js';
+import { AIRLINES, IATA2ICAO, paintFor } from './airlines.js';
 
 const Q = new URLSearchParams(location.search);
 const GEO = JSON.parse(document.getElementById('geo-data').textContent);
@@ -15,7 +15,7 @@ const PRESETS = [
   ['MID', 'Midway between LaGuardia and Kennedy'], ['KJFK', 'Kennedy'], ['KLGA', 'LaGuardia'], ['KEWR', 'Newark'], ['KHPN', 'White Plains'],
   ['KBDR', 'Bridgeport'], ['KHVN', 'New Haven'], ['KISP', 'Islip'], ['KTEB', 'Teterboro'], ['KSWF', 'Stewart'], ['KBDL', 'Hartford Bradley'],
 ];
-const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5 };
+const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true };
 const S = Object.assign({}, DEFAULTS);
 try { Object.assign(S, JSON.parse(localStorage.getItem('sky3d') || '{}')); } catch (e) { /* storage unavailable */ }
 for (const k of Object.keys(DEFAULTS)) if (Q.has(k)) { const v = Q.get(k); S[k] = typeof DEFAULTS[k] === 'number' ? +v : typeof DEFAULTS[k] === 'boolean' ? v !== '0' && v !== 'false' : v; }
@@ -46,6 +46,7 @@ const camera = new THREE.PerspectiveCamera(38, 16 / 9, 0.05, 12000);
 const hemi = new THREE.HemisphereLight(0xffffff, 0x8899aa, 1.0); scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffffff, 2.0); scene.add(sun); scene.add(sun.target);
 const sky = new Sky(scene);
+const weather = new WeatherLayer();
 setOrigin(C.lat, C.lon);
 const ground = new Ground(scene, GEO, AIRPORTS);
 const trails = new Segments(60000, { width: 2.2, color: 0xffffff, opacity: 1, depthTest: true, renderOrder: 8 });
@@ -85,20 +86,41 @@ const KEYS = [
   { e: 2, zenith: hex(0x33558f), horizon: hex(0xf0b07a), haze: hex(0xc39c86), water: hex(0x3d5c82), land: hex(0x67664f), coast: hex(0xf4e2c6), coastA: 0.6, trail: hex(0xfff2dc), body: hex(0xf3e6d6), stars: 0, night: 0.35, sunI: 2.2, hemiI: 1.5, glow: 1, runway: hex(0xfff0d8), label: 0.62 },
   { e: 16, zenith: hex(0x2a69b0), horizon: hex(0xb7d6ec), haze: hex(0xa5c5dc), water: hex(0x3b74a2), land: hex(0x7b9675), coast: hex(0xeef5ea), coastA: 0.7, trail: hex(0xffffff), body: hex(0xf7f8f8), stars: 0, night: 0, sunI: 2.6, hemiI: 2.0, glow: 0.7, runway: hex(0xfffaf0), label: 0.66 },
 ];
+// Morning light is cooler and pinker than evening light, so dawn has its own colours for the three twilight steps.
+const DAWN = {
+  '-5': { zenith: 0x141c40, horizon: 0x8a5a86, haze: 0x3c3a5a },
+  '-1': { zenith: 0x27407a, horizon: 0xe8a0a0, haze: 0x7d6a86, coast: 0xdcc4cc, body: 0xcdb8c0, trail: 0xffe6e0 },
+  '2': { zenith: 0x3f6aa8, horizon: 0xf6cdb0, haze: 0xc9aaa4, body: 0xf4e6de },
+};
+const KEYS_DAWN = KEYS.map((k) => { const d = DAWN[String(k.e)], o = Object.assign({}, k); if (d) for (const n of Object.keys(d)) o[n] = hex(d[n]); return o; });
 const look = { zenith: hex(0), horizon: hex(0), haze: hex(0), water: hex(0), land: hex(0), coast: hex(0), trail: hex(0), body: hex(0), runway: hex(0), coastA: 0.6, stars: 0, night: 0, sunI: 1, hemiI: 1, glow: 0, label: 0.6 };
-const sunDir = new THREE.Vector3(0, 1, 0);
+const sunDir = new THREE.Vector3(0, 1, 0), sunNow = { el: 0, az: 0, rise: 0.5 };
+const LC = new THREE.Color(), WHITE = new THREE.Color(1, 1, 1);
+const FIXED_SUN = { day: { el: 38, az: 150, rise: 0.5 }, dawn: { el: -2.2, az: 98, rise: 1 }, dusk: { el: -2.5, az: 262, rise: 0 }, night: { el: -30, az: 330, rise: 0 } };
 function updateLook(lat, lon, date) {
-  let sp = sunPosition(date, lat, lon);
-  if (S.sky === 'day') sp = { el: 38, az: 150 }; else if (S.sky === 'dusk') sp = { el: -2.5, az: 262 }; else if (S.sky === 'night') sp = { el: -30, az: 330 };
+  const sp = FIXED_SUN[S.sky] || sunPosition(date, lat, lon);
+  sunNow.el = sp.el; sunNow.az = sp.az; sunNow.rise = sp.rise;
   const e = sp.el; let i = 0; while (i < KEYS.length - 2 && e > KEYS[i + 1].e) i++;
-  const a = KEYS[i], b = KEYS[i + 1], t = smooth(clamp((e - a.e) / (b.e - a.e), 0, 1));
-  for (const k of ['zenith', 'horizon', 'haze', 'water', 'land', 'coast', 'trail', 'body', 'runway']) look[k].copy(a[k]).lerp(b[k], t);
+  const a = KEYS[i], b = KEYS[i + 1], a2 = KEYS_DAWN[i], b2 = KEYS_DAWN[i + 1], t = smooth(clamp((e - a.e) / (b.e - a.e), 0, 1));
+  for (const k of ['zenith', 'horizon', 'haze', 'water', 'land', 'coast', 'trail', 'body', 'runway']) { look[k].copy(a[k]).lerp(b[k], t); LC.copy(a2[k]).lerp(b2[k], t); look[k].lerp(LC, sp.rise); }
   for (const k of ['coastA', 'stars', 'night', 'sunI', 'hemiI', 'glow', 'label']) look[k] = lerp(a[k], b[k], t);
+  // weather: heavy cloud greys the sky and flattens the light, fog and falling rain or snow thicken the haze, lying snow whitens the land
+  const W = wxNow, up = wxAlt(), day = 1 - look.night, heavy = smooth(clamp((W.cover - 0.45) / 0.55, 0, 1)), ov = heavy * up;
+  LC.setRGB(lerp(0.035, 0.53, day), lerp(0.045, 0.57, day), lerp(0.06, 0.62, day)); look.zenith.lerp(LC, ov * 0.88);
+  LC.setRGB(lerp(0.07, 0.7, day), lerp(0.08, 0.73, day), lerp(0.1, 0.77, day)); look.horizon.lerp(LC, ov * 0.85); look.haze.lerp(LC, ov * 0.8);
+  look.stars *= 1 - clamp(W.cover * 1.25, 0, 1) * up; look.glow *= 1 - ov * 0.9; look.sunI *= 1 - heavy * 0.6;
+  for (const c of [look.water, look.land]) { LC.setScalar(((c.r + c.g + c.b) / 3) * 0.94); c.lerp(LC, heavy * 0.42); }
+  if (W.snowGround > 0.01) { LC.copy(look.body).multiplyScalar(0.92); look.land.lerp(LC, W.snowGround * 0.78); }
+  scene.fog.density = 0.0024 * (1 + (1.4 * W.fog + 0.45 * Math.max(W.rain, W.snow)) * up);
+  const su = sky.uniforms; su.cover.value = clamp(W.cover, 0, 1) * up;
+  su.cloudLit.value.copy(look.body).multiplyScalar((1 - 0.62 * look.night) * (1 - 0.2 * heavy - 0.12 * Math.max(W.rain, W.snow)));
+  su.cloudShade.value.copy(su.cloudLit.value).multiplyScalar(0.66).lerp(look.zenith, 0.22);
   const el = Math.max(sp.el, -6) * D2R, az = sp.az * D2R;
   sunDir.set(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el));
-  sky.uniforms.zenith.value.copy(look.zenith); sky.uniforms.horizon.value.copy(look.horizon); sky.uniforms.haze.value.copy(look.haze);
-  sky.uniforms.sunDir.value.copy(sunDir); sky.uniforms.glow.value = look.glow;
-  sky.uniforms.sunColor.value.set(1.0, lerp(0.62, 0.93, clamp(e / 20, 0, 1)), lerp(0.36, 0.8, clamp(e / 20, 0, 1)));
+  su.zenith.value.copy(look.zenith); su.horizon.value.copy(look.horizon); su.haze.value.copy(look.haze);
+  su.sunDir.value.copy(sunDir); su.glow.value = look.glow;
+  su.sunColor.value.set(1.0, lerp(0.62, 0.93, clamp(e / 20, 0, 1)), lerp(0.36, 0.8, clamp(e / 20, 0, 1)));
+  if (sp.rise > 0.5 && e < 12) su.sunColor.value.lerp(LC.setRGB(1.0, 0.8, 0.74), (sp.rise - 0.5) * 2 * clamp(1 - e / 12, 0, 1) * 0.7);   // a rosier sun in the morning
   sky.starU.opacity.value = look.stars;
   scene.fog.color.copy(look.haze);
   ground.waterMat.color.copy(look.water); ground.landMat.color.copy(look.land);
@@ -107,11 +129,98 @@ function updateLook(lat, lon, date) {
   ground.runways.mat.uniforms.color.value.copy(look.runway);
   ground.ring.mat.uniforms.color.value.copy(look.coast); ground.ring.mat.uniforms.opacity.value = 0.2;
   trails.mat.uniforms.color.value.copy(look.trail); drops.mat.uniforms.color.value.copy(look.trail);
-  hemi.intensity = look.hemiI; hemi.color.copy(look.horizon).lerp(new THREE.Color(1, 1, 1), 0.5); hemi.groundColor.copy(look.land).lerp(look.water, 0.5);
-  sun.intensity = look.sunI; sun.color.copy(sky.uniforms.sunColor.value).lerp(new THREE.Color(1, 1, 1), clamp(e / 25, 0, 1));
+  hemi.intensity = look.hemiI; hemi.color.copy(look.horizon).lerp(WHITE, 0.5); hemi.groundColor.copy(look.land).lerp(look.water, 0.5);
+  sun.intensity = look.sunI; sun.color.copy(su.sunColor.value).lerp(WHITE, clamp(e / 25, 0, 1));
   for (const l of labels) l.sprite.material.opacity = look.label;
   for (const s of allLines) s.mat.uniforms.fogDensity.value = scene.fog.density;
   for (const s of ground.lines) s.mat.uniforms.fogDensity.value = scene.fog.density * 1.7;   // shore lines thin out sooner so the horizon stays calm
+}
+
+// ---------- weather ----------
+// The real weather for the place on screen comes from the free Open-Meteo service. Only a rounded position is sent
+// (the nearest quarter of a degree, about 17 miles), never anything from the antenna.
+const WX_API = Q.get('wxApi') || 'https://api.open-meteo.com/v1/forecast';
+const WX_CODES = {   // World Meteorological Organization weather codes: words, strength of rain, strength of snow
+  0: ['Clear', 0, 0], 1: ['Mostly clear', 0, 0], 2: ['Partly cloudy', 0, 0], 3: ['Overcast', 0, 0], 45: ['Fog', 0, 0], 48: ['Freezing fog', 0, 0],
+  51: ['Light drizzle', 0.15, 0], 53: ['Drizzle', 0.25, 0], 55: ['Heavy drizzle', 0.35, 0], 56: ['Freezing drizzle', 0.2, 0], 57: ['Freezing drizzle', 0.35, 0],
+  61: ['Light rain', 0.35, 0], 63: ['Rain', 0.65, 0], 65: ['Heavy rain', 1, 0], 66: ['Freezing rain', 0.4, 0], 67: ['Heavy freezing rain', 0.8, 0],
+  71: ['Light snow', 0, 0.35], 73: ['Snow', 0, 0.65], 75: ['Heavy snow', 0, 1], 77: ['Snow grains', 0, 0.25],
+  80: ['Light showers', 0.4, 0], 81: ['Showers', 0.7, 0], 82: ['Heavy showers', 1, 0], 85: ['Snow showers', 0, 0.5], 86: ['Heavy snow showers', 0, 1],
+  95: ['Thunderstorm', 0.9, 0], 96: ['Thunderstorm with hail', 1, 0], 99: ['Thunderstorm with hail', 1, 0],
+};
+// wind: miles an hour. from: the compass direction the wind blows from, in degrees.
+const WX_PRESETS = {
+  clear: {}, cloud: { cover: 0.55, wind: 8, from: 250 }, overcast: { cover: 1, wind: 6, from: 200 }, rain: { cover: 1, rain: 0.65, wind: 10, from: 110 },
+  storm: { cover: 1, rain: 1, wind: 24, from: 210, storm: 1 }, snow: { cover: 1, snow: 0.7, wind: 7, from: 30, snowGround: 1 },
+  wind: { cover: 0.3, wind: 32, from: 300 }, fog: { cover: 0.85, fog: 1, wind: 2, from: 90 },
+};
+const WXN = ['cover', 'rain', 'snow', 'fog', 'storm', 'snowGround', 'wE', 'wN'];
+const wxNow = { cover: 0, rain: 0, snow: 0, fog: 0, storm: 0, snowGround: 0, wE: 0, wN: 0 }, wxTarget = Object.assign({}, wxNow);
+const wxInfo = { ok: false, text: '', tempF: null, wind: 0, from: 0, gust: 0 };
+const wxCache = new Map(); let wxBusy = false, wxLastCall = -1e9, wxSnap = true, flashT = -100, flashNext = 0;
+function setWeather(w) {
+  const mph = w.wind || 0, to = ((w.from || 0) + 180) * D2R;
+  Object.assign(wxTarget, { cover: w.cover || 0, rain: w.rain || 0, snow: w.snow || 0, fog: w.fog || 0, storm: w.storm || 0, snowGround: w.snowGround || 0, wE: Math.sin(to) * mph, wN: Math.cos(to) * mph });
+}
+function readWeather(c) {
+  const K = WX_CODES[c.weather_code] || ['', 0, 0], num = (v) => (typeof v === 'number' && isFinite(v) ? v : null);
+  let cover = num(c.cloud_cover) !== null ? c.cloud_cover / 100 : [0, 0.2, 0.5, 1][c.weather_code] || 0;
+  if (K[1] > 0 || K[2] > 0) cover = Math.max(cover, 0.85);
+  const vis = num(c.visibility), fog = Math.max(c.weather_code === 45 || c.weather_code === 48 ? 1 : 0, vis !== null ? clamp(1 - vis / 6000, 0, 1) * 0.8 : 0);
+  return { cover, rain: K[1], snow: K[2], fog, storm: c.weather_code >= 95 ? 1 : 0, snowGround: clamp(Math.max((num(c.snow_depth) || 0) / 0.04, K[2] >= 0.6 ? 0.5 : 0), 0, 1),
+    wind: num(c.wind_speed_10m) || 0, from: num(c.wind_direction_10m) || 0, gust: num(c.wind_gusts_10m) || 0, tempF: num(c.temperature_2m), text: K[0] };
+}
+function applyWeather() {
+  if (S.wx !== 'real') { setWeather(WX_PRESETS[S.wx] || {}); wxInfo.ok = false; return; }
+  const key = (Math.round(pose.lat * 4) / 4).toFixed(2) + ',' + (Math.round(pose.lon * 4) / 4).toFixed(2), hit = wxCache.get(key), t = nowS();
+  if (hit && hit.w) { setWeather(hit.w); Object.assign(wxInfo, hit.w, { ok: true }); }
+  if ((hit && t - hit.t < 600) || wxBusy || t - wxLastCall < 20 || MANUAL && !Q.has('wxApi')) return;
+  wxBusy = true; wxLastCall = t; const [la, lo] = key.split(',');
+  wxCache.set(key, { t, w: hit ? hit.w : null });
+  getJSON(WX_API + '?latitude=' + la + '&longitude=' + lo + '&current=temperature_2m,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility,snow_depth&wind_speed_unit=mph&temperature_unit=fahrenheit')
+    .then((d) => { if (d && d.current) wxCache.set(key, { t: nowS(), w: readWeather(d.current) }); })
+    .catch(() => { const c = wxCache.get(key); if (c) c.t = nowS() - 480; if (!wxCache.get(key).w) wxInfo.ok = false; })   // try again in two minutes
+    .then(() => { wxBusy = false; });
+}
+// How much of the weather the camera is under: all of it near the ground, none of it up at cruising height, above the clouds.
+function wxAlt() { return 1 - smooth(clamp((pose.alt - 4) / 3.5, 0, 1)); }
+function updateWeather(t, dt) {
+  const k = wxSnap ? 1 : clamp(dt / 5, 0, 1); wxSnap = false;
+  for (const n of WXN) wxNow[n] = lerp(wxNow[n], wxTarget[n], k);
+  const up = wxAlt(), mph = Math.hypot(wxNow.wE, wxNow.wN), aspect = camera.aspect, day = 1 - look.night;
+  // the part of the wind that blows across the picture, left to right, as the camera sees it
+  const right = (pose.az - 90) * D2R, across = wxNow.wE * Math.sin(right) + wxNow.wN * Math.cos(right);
+  weather.rain.set(dt, t, clamp(across / 26, -1.4, 1.4), -1, 2.3, wxNow.rain > 0.02 ? (0.1 + 0.9 * wxNow.rain) * up : 0, 0.22 + 0.3 * day, aspect);
+  weather.snow.set(dt, t, clamp(across / 9, -2.5, 2.5), -1, 0.27 + 0.12 * wxNow.snow + Math.abs(across) / 60, wxNow.snow > 0.02 ? (0.12 + 0.88 * wxNow.snow) * up : 0, 0.5 + 0.4 * day, aspect);
+  const windy = smooth(clamp((mph - 13) / 20, 0, 1)) * up * clamp(Math.abs(across) / Math.max(mph, 1) * 1.6, 0, 1);
+  weather.wind.set(dt, t, across >= 0 ? 1 : -1, -0.05, 0.3 + mph / 40, windy > 0.02 ? 1 : 0, windy * (0.17 + 0.17 * day), aspect);
+  const sd = sky.uniforms.drift.value; sd.x += (wxNow.wE * 0.0007 + 0.0012) * dt; sd.y -= wxNow.wN * 0.0007 * dt;
+  // lightning: a soft double flicker in the cloud, never a hard flash
+  if (wxNow.storm > 0.5 && up > 0.3 && t > flashNext) { flashT = t; flashNext = t + 7 + Math.random() * 16; }
+  const ft = t - flashT, f = ft < 0 || ft > 2 ? 0 : Math.exp(-ft * 9) + (ft > 0.22 ? 0.7 * Math.exp(-(ft - 0.22) * 7) : 0);
+  sky.uniforms.flash.value = f * 0.5 * up; hemi.intensity = look.hemiI * (1 + f * 0.5 * up);
+}
+
+// ---------- the time, the sun and the weather, in words in the corner ----------
+const fmtClock = (d) => (d ? d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).toLowerCase() : '');
+const COMPASS = ['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest'];
+const sunDay = { key: '', rise: null, set: null };
+function updateCorner(date) {
+  const el = $('corner'); el.classList.toggle('on', !!S.corner); if (!S.corner) return;
+  const key = date.toDateString() + '|' + (Math.round(pose.lat * 2) / 2) + '|' + (Math.round(pose.lon * 2) / 2);
+  if (sunDay.key !== key) { Object.assign(sunDay, sunTimes(date, pose.lat, pose.lon), { key }); }
+  const e = sunNow.el, phase = S.sky !== 'real' ? 'Sky held at ' + S.sky : e >= 3 ? 'Daytime' : e < -6 ? 'Nighttime' : sunNow.rise > 0.5 ? 'Dawn' : 'Dusk';
+  const set = (id, text) => { const n = $(id); if (n._t !== text) { n._t = text; n.textContent = text; n.hidden = !text; } };
+  set('k-time', fmtClock(date)); set('k-phase', phase);
+  set('k-sun', sunDay.rise && sunDay.set ? 'Sunrise ' + fmtClock(sunDay.rise) + '   Sunset ' + fmtClock(sunDay.set) : '');
+  let w = '';
+  if (S.wx !== 'real') w = S.wx === 'clear' ? '' : 'Weather held at ' + ({ cloud: 'partly cloudy', storm: 'thunderstorm', wind: 'windy' }[S.wx] || S.wx);
+  else if (wxInfo.ok) {
+    w = (wxInfo.tempF !== null ? Math.round(wxInfo.tempF) + '° ' : '') + wxInfo.text;
+    w += wxInfo.wind < 3 ? ', calm' : ', wind from the ' + COMPASS[Math.round(wxInfo.from / 45) % 8] + ' at ' + Math.round(wxInfo.wind) + ' mph';
+    if (wxInfo.gust > wxInfo.wind + 9) w += ', gusts to ' + Math.round(wxInfo.gust);
+  }
+  set('k-wx', w);
 }
 
 // ---------- aircraft ----------
@@ -189,8 +298,15 @@ function updatePlane(p, t, dt, night) {
   p.rRoll = lerp(p.rRoll, clamp(bank, -0.6, 0.6), clamp(dt * 1.2, 0, 1));
   project(p.rLat, p.rLon, p.rAlt, p.pos);
   if (!p.mesh) {
-    const kind = modelFor(p.category, p.type); const al = AIRLINES[p.callsign().slice(0, 3)];
-    p.mesh = new PlaneMesh(kind, al && /^[A-Z]{3}\d/.test(p.callsign()) ? al[2] : 0x8fa3b8); p.kind = kind; planeLayer.add(p.mesh.group);
+    const kind = modelFor(p.category, p.type);
+    p.mesh = new PlaneMesh(kind, paintFor(p.callsign(), p.hex, kind)); p.kind = kind; p.paintKey = p.callsign() + '|' + kind; planeLayer.add(p.mesh.group);
+  } else if (p.paintKey !== p.callsign() + '|' + modelFor(p.category, p.type) && t - (p.tPaint || 0) > 5) {
+    // the callsign or the aircraft type often arrives a few seconds after the first position, so repaint once it is known
+    p.tPaint = t; const kind = modelFor(p.category, p.type);
+    if (kind !== p.kind && (shot.plane === p || (prevShot && prevShot.plane === p))) { /* the camera is riding on this aircraft: change its shape later, so the view never jumps */ }
+    else if (kind !== p.kind) { planeLayer.remove(p.mesh.group); p.mesh.dispose(); p.mesh = new PlaneMesh(kind, paintFor(p.callsign(), p.hex, kind)); p.kind = kind; planeLayer.add(p.mesh.group); }
+    else { const c = paintFor(p.callsign(), p.hex, kind); p.mesh.paint.forEach((col, i) => col.set(c[i])); }
+    p.paintKey = p.callsign() + '|' + p.kind;
   }
   const g = p.mesh.group; g.position.copy(p.pos);
   const dist = camera.position.distanceTo(p.pos);
@@ -517,13 +633,15 @@ function applyCenter() {
 }
 function initPanel() {
   buildCenterOptions();
-  $('f-other').value = S.other; $('f-radius').value = String(S.radius); $('f-pace').value = String(S.pace); $('f-cap').checked = !!S.captions; $('f-sky').value = S.sky; $('f-trail').value = String(S.trail); $('f-flight').value = S.follow || '';
+  $('f-other').value = S.other; $('f-radius').value = String(S.radius); $('f-pace').value = String(S.pace); $('f-cap').checked = !!S.captions; $('f-sky').value = S.sky; $('f-wx').value = S.wx; $('f-corner').checked = !!S.corner; $('f-trail').value = String(S.trail); $('f-flight').value = S.follow || '';
   $('f-center').onchange = (e) => { S.center = e.target.value; $('row-other').hidden = S.center !== 'OTHER'; save(); if (S.center !== 'OTHER' || AP[S.other.toUpperCase()] || AP['K' + S.other.toUpperCase()]) applyCenter(); };
   $('f-other').oninput = (e) => { S.other = e.target.value.trim().toUpperCase(); const ok = AP[S.other] || AP['K' + S.other]; $('other-note').textContent = ok ? ok[2] + (ok[3] ? ', ' + ok[3] : '') : (S.other.length >= 3 ? 'No airport found with that code' : ''); if (ok) { save(); applyCenter(); } };
   $('f-radius').onchange = (e) => { S.radius = +e.target.value; save(); ground.setRing(C.lat, C.lon, radiusKm());  };
   $('f-pace').onchange = (e) => { S.pace = +e.target.value; save(); };
   $('f-cap').onchange = (e) => { S.captions = e.target.checked; save(); };
   $('f-sky').onchange = (e) => { S.sky = e.target.value; save(); };
+  $('f-wx').onchange = (e) => { S.wx = e.target.value; save(); if (S.wx === 'real') setWeather({}); applyWeather(); updateCorner(simClock || new Date()); };
+  $('f-corner').onchange = (e) => { S.corner = e.target.checked; save(); };
   $('f-trail').onchange = (e) => { S.trail = +e.target.value; save(); };
   $('f-follow').onsubmit = (e) => { e.preventDefault(); setFollow($('f-flight').value); $('f-flight').blur(); };
   $('f-stop').onclick = () => setFollow('');
@@ -551,7 +669,9 @@ const A3 = new THREE.Vector3();
 function frame() {
   const t = nowS(), dt = clamp(t - lastT, 0.001, 0.25); lastT = t;
   updateCamera(t);
-  if (t - lookT > 2) { lookT = t; updateLook(pose.lat, pose.lon, simClock || new Date()); }
+  const date = simClock || new Date();
+  updateLook(pose.lat, pose.lon, date); updateWeather(t, dt);
+  if (t - lookT > 2) { lookT = t; applyWeather(); updateCorner(date); }
   sky.starU.time.value = t;
   trails.reset(); drops.reset();
   const trailSec = S.trail * 60;
@@ -579,17 +699,20 @@ function frame() {
   updateCaption(t);
   // if the screen cannot keep up, draw at a lower resolution rather than stutter
   fpsN++; if (!MANUAL && t - fpsT > 5) { const fps = fpsN / (t - fpsT); fpsN = 0; fpsT = t; if (fps < 24 && DPR > 0.75 && document.visibilityState === 'visible' && ++slow >= 2) { slow = 0; DPR = Math.max(0.75, DPR - 0.25); renderer.setPixelRatio(DPR); resize(); } else if (fps >= 24) slow = 0; }
-  if (!MANUAL || renderNext) renderer.render(scene, camera);
+  if (!MANUAL || renderNext) {
+    renderer.render(scene, camera);
+    if (weather.active) { renderer.autoClear = false; renderer.render(weather.scene, weather.camera); renderer.autoClear = true; }
+  }
   if (!MANUAL) requestAnimationFrame(frame);
 }
 
 // ---------- start ----------
-resize(); reorigin(C.lat, C.lon); updateLook(C.lat, C.lon, simClock || new Date()); initPanel();
+resize(); reorigin(C.lat, C.lon); applyWeather(); updateLook(C.lat, C.lon, simClock || new Date()); initPanel();
 if (S.follow) setFollow(S.follow);
 if (!MANUAL) { poll(); setInterval(followTick, 1000); }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { planes, pose, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } };
 if (!MANUAL) requestAnimationFrame(frame);

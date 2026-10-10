@@ -118,6 +118,9 @@ http.createServer((req, res) => {
       json(out, { 'Access-Control-Allow-Origin': '*' });
     }); return;
   }
+  if (u.pathname === '/mock/wx') {   // stand-in for the weather service: steady rain with a west wind
+    return json({ latitude: +u.searchParams.get('latitude'), longitude: +u.searchParams.get('longitude'), current: { time: '2026-10-10T12:00', temperature_2m: 52.4, weather_code: 63, cloud_cover: 100, wind_speed_10m: 14.2, wind_direction_10m: 262, wind_gusts_10m: 27.5, visibility: 9000, snow_depth: 0 } }, { 'Access-Control-Allow-Origin': '*' });
+  }
   if (u.pathname.startsWith('/mock/v2/callsign/')) { const cs = decodeURIComponent(u.pathname.split('/').pop()); return json({ ac: cs === 'DAL2210' ? [farFlight(T)] : [], msg: 'No error', now: Math.round(T * 1000), total: cs === 'DAL2210' ? 1 : 0 }); }
   if (u.pathname.startsWith('/mock/v2/')) return json({ ac: [], msg: 'No error', now: Math.round(T * 1000), total: 0 });
   res.writeHead(404); res.end('not found');

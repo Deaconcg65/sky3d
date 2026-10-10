@@ -1,10 +1,10 @@
 <!doctype html>
 <!--
-  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 1.
+  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 2.
   One self-contained page. Put it on the receiver's web server and open it in a browser.
   Includes three.js (c) 2010-2024 three.js authors, MIT License.
   Shorelines: GSHHG (Wessel and Smith, LGPL) and Natural Earth (public domain). State lines: United States Census Bureau.
-  Airports and runways: OurAirports (public domain).
+  Airports and runways: OurAirports (public domain). Weather: Open-Meteo.com (CC BY 4.0).
 -->
 <html lang="en">
 <head>
@@ -36,6 +36,10 @@ body { cursor: none; } body.awake { cursor: default; }
 #c-progtext { font-size: 1.85vh; color: var(--soft); margin-top: 1.1vh; }
 #msg { position: fixed; left: 5.2vw; top: 6vh; max-width: 60vw; font-size: 2.2vh; color: var(--soft); opacity: 0; transition: opacity 1.4s ease; pointer-events: none; text-shadow: 0 1px 12px rgba(0,0,0,0.6); z-index: 2; }
 #msg.on { opacity: 1; }
+#corner { position: fixed; right: 3vw; top: 5vh; text-align: right; font-size: 1.9vh; line-height: 1.5; color: var(--ink); opacity: 0; transition: opacity 1.6s ease; pointer-events: none; z-index: 2;
+  text-shadow: 0 0 14px rgba(8,16,30,0.75), 0 1px 3px rgba(8,16,30,0.7), 0 0 1px rgba(8,16,30,0.6); font-variant-numeric: tabular-nums; white-space: pre; }
+#corner.on { opacity: 1; } body.panel #corner { opacity: 0; }
+#k-top { font-size: 2.5vh; color: var(--ink); font-weight: 400; } #k-phase { margin-left: 0.7em; font-size: 0.78em; letter-spacing: 0.04em; }
 #gear { position: fixed; right: 2.2vw; bottom: 3.4vh; z-index: 5; opacity: 0; transition: opacity 0.5s ease; pointer-events: none;
   font: 500 15px var(--face); color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 10px 18px; cursor: pointer; }
 body.awake #gear { opacity: 1; pointer-events: auto; } body.panel #gear { opacity: 0; pointer-events: none; }
@@ -75,6 +79,7 @@ body.panel #panel { transform: none; }
 </div>
 <div id="shade"></div>
 <div id="msg" role="status"></div>
+<div id="corner"><div id="k-top"><span id="k-time"></span><span id="k-phase"></span></div><div id="k-sun"></div><div id="k-wx"></div></div>
 <button id="gear" type="button">Settings</button>
 <aside id="panel" aria-label="Settings">
   <button id="close" class="quiet" type="button">Close</button>
@@ -105,12 +110,18 @@ body.panel #panel { transform: none; }
   <select id="f-pace"><option value="12">Short, about 12 seconds</option><option value="20">Medium, about 20 seconds</option><option value="35">Long, about 35 seconds</option><option value="60">Very long, about a minute</option></select>
 
   <label for="f-sky">Sky</label>
-  <select id="f-sky"><option value="real">Follows the real time of day</option><option value="day">Always day</option><option value="dusk">Always dusk</option><option value="night">Always night</option></select>
+  <select id="f-sky"><option value="real">Follows the real time of day</option><option value="dawn">Always dawn</option><option value="day">Always day</option><option value="dusk">Always dusk</option><option value="night">Always night</option></select>
+  <div class="note">Day, night, dawn and dusk come from this computer's clock and the sunrise and sunset for the place on screen.</div>
+
+  <label for="f-wx">Weather</label>
+  <select id="f-wx"><option value="real">Follows the real weather</option><option value="clear">Always clear</option><option value="cloud">Partly cloudy</option><option value="overcast">Overcast</option><option value="rain">Rain</option><option value="storm">Thunderstorm</option><option value="snow">Snow</option><option value="wind">Windy</option><option value="fog">Fog</option></select>
+  <div class="note">The real weather is for the place on screen. Weather data by <b>Open-Meteo.com</b>. The other choices are for trying each look.</div>
 
   <label for="f-trail">Trail behind each aircraft</label>
   <select id="f-trail"><option value="0">None</option><option value="2">2 minutes</option><option value="5">5 minutes</option><option value="10">10 minutes</option></select>
 
   <label class="check"><input id="f-cap" type="checkbox"> Show the caption for each aircraft</label>
+  <label class="check"><input id="f-corner" type="checkbox"> Show the time, sun and weather in the corner</label>
 
   <hr>
   <dl>
@@ -120,7 +131,7 @@ body.panel #panel { transform: none; }
     <dt>F</dt><dd>Fill the screen</dd>
     <dt>S</dt><dd>Open or close these settings</dd>
   </dl>
-  <p class="note" style="margin-top:22px">Version 1, October 10, 2026</p>
+  <p class="note" style="margin-top:22px">Version 2, October 10, 2026</p>
 </aside>
 <script type="application/json" id="geo-data">/*GEO*/</script>
 <script type="application/json" id="airport-data">/*AIRPORTS*/</script>

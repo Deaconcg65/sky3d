@@ -231,18 +231,33 @@ export class Sky {
     this.uniforms = {
       zenith: { value: new THREE.Color() }, horizon: { value: new THREE.Color() }, haze: { value: new THREE.Color() },
       sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunColor: { value: new THREE.Color(1, 0.9, 0.75) }, glow: { value: 0 },
+      cover: { value: 0 }, cloudLit: { value: new THREE.Color(1, 1, 1) }, cloudShade: { value: new THREE.Color(0.7, 0.72, 0.76) }, drift: { value: new THREE.Vector2() }, flash: { value: 0 },
     };
     const mat = new THREE.ShaderMaterial({
       side: THREE.BackSide, depthTest: false, depthWrite: false, fog: false, uniforms: this.uniforms,
       vertexShader: 'varying vec3 vDir; void main(){ vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
-      fragmentShader: `uniform vec3 zenith; uniform vec3 horizon; uniform vec3 haze; uniform vec3 sunDir; uniform vec3 sunColor; uniform float glow; varying vec3 vDir;
+      fragmentShader: `uniform vec3 zenith; uniform vec3 horizon; uniform vec3 haze; uniform vec3 sunDir; uniform vec3 sunColor; uniform float glow;
+        uniform float cover; uniform vec3 cloudLit; uniform vec3 cloudShade; uniform vec2 drift; uniform float flash; varying vec3 vDir;
+        float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float noise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y); }
+        float fbm(vec2 p){ float a = 0.5, s = 0.0; for (int i = 0; i < 4; i++) { s += a * noise(p); p = p * 2.03 + vec2(17.0, 9.0); a *= 0.5; } return s; }
         void main(){ vec3 d = normalize(vDir); float h = d.y;
           float t = pow(smoothstep(-0.06, 0.9, h), 0.6);
           vec3 col = mix(horizon, zenith, t);
           col = mix(haze, col, smoothstep(-0.16, 0.0, h));
           float sd = max(dot(d, sunDir), 0.0);
           float low = smoothstep(-0.25, 0.1, h);
-          col += sunColor * (pow(sd, 900.0) * 1.2 + pow(sd, 48.0) * 0.35 + pow(sd, 6.0) * 0.22) * glow * low;
+          float c = 0.0;
+          if (cover > 0.01 && h > 0.0) {   // a drifting layer of cloud, thinning toward the horizon
+            vec2 uv = d.xz / (h + 0.14) * 0.9 - drift;
+            float n = fbm(uv), thr = mix(0.74, 0.2, cover);
+            c = smoothstep(thr, thr + 0.24, n) * smoothstep(0.0, 0.1, h);
+            vec3 cc = mix(cloudShade, cloudLit, smoothstep(thr, thr + 0.5, n) * 0.6 + 0.4 * pow(sd, 3.0));
+            col = mix(col, cc, c * 0.94);
+          }
+          col += sunColor * (pow(sd, 900.0) * 1.2 + pow(sd, 48.0) * 0.35 + pow(sd, 6.0) * 0.22) * glow * low * (1.0 - c * 0.85);
+          col += vec3(0.55, 0.6, 0.72) * flash * (0.45 + 0.55 * c) * smoothstep(-0.2, 0.3, h);
           gl_FragColor = vec4(col, 1.0); }`,
     });
     this.dome = new THREE.Mesh(new THREE.SphereGeometry(5000, 48, 24), mat); this.dome.renderOrder = -10; this.dome.frustumCulled = false; scene.add(this.dome);
@@ -265,64 +280,158 @@ export class Sky {
   follow(camPos, q) { this.dome.position.copy(camPos); this.stars.position.copy(camPos); this.dome.quaternion.copy(q); this.stars.quaternion.copy(q); }
 }
 
+// ---------- rain, snow and wind, drawn flat over the picture ----------
+// Each kind is one cloud of small marks that is moved entirely on the graphics card. The page only tells it how far the
+// marks have travelled so far (off) and which way they are heading (dir), so a change in wind bends the fall smoothly.
+const FALL_VS = `
+attribute vec4 seed; uniform vec2 off; uniform vec2 dir; uniform float amount; uniform float len; uniform float width; uniform float aspect; uniform float round; uniform float time;
+varying float vA; varying vec2 vUv;
+void main() {
+  float depth = 0.4 + 0.6 * seed.z;
+  vec2 c = (fract(seed.xy + off * depth) * 2.0 - 1.0) * vec2(aspect * 1.15, 1.15);
+  vec2 perp = vec2(-dir.y, dir.x), p;
+  if (round > 0.5) { c.x += sin(time * (0.5 + seed.w) + seed.w * 40.0) * 0.022 * depth; float r = width * (0.45 + 1.2 * seed.z * seed.z); p = c + position.xy * r; }
+  else p = c + dir * (position.x - 0.5) * len * depth + perp * position.y * width * depth;
+  gl_Position = vec4(p.x / aspect, p.y, 0.0, 1.0);
+  vA = step(seed.w, amount) * (0.3 + 0.7 * seed.z); vUv = position.xy;
+}`;
+const FALL_FS = `
+uniform vec3 color; uniform float opacity; uniform float round; varying float vA; varying vec2 vUv;
+void main() {
+  float a = round > 0.5 ? 1.0 - smoothstep(0.25, 1.0, length(vUv)) : (1.0 - abs(vUv.y)) * sin(3.14159 * clamp(vUv.x, 0.0, 1.0));
+  a *= vA * opacity; if (a < 0.004) discard;
+  gl_FragColor = vec4(color, a);
+}`;
+class Fall {
+  constructor(n, { round = false, len = 0.1, width = 0.002, color = 0xffffff } = {}) {
+    const g = new THREE.InstancedBufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(round ? [-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0] : [0, -1, 0, 1, -1, 0, 1, 1, 0, 0, 1, 0]), 3));
+    g.setIndex([0, 1, 2, 0, 2, 3]);
+    const seed = new Float32Array(n * 4); let sd = 11 + n; const rnd = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
+    for (let i = 0; i < n * 4; i++) seed[i] = rnd();
+    g.setAttribute('seed', new THREE.InstancedBufferAttribute(seed, 4)); g.instanceCount = n;
+    this.u = { off: { value: new THREE.Vector2() }, dir: { value: new THREE.Vector2(0, -1) }, amount: { value: 0 }, len: { value: len }, width: { value: width }, aspect: { value: 1.78 },
+      round: { value: round ? 1 : 0 }, time: { value: 0 }, color: { value: new THREE.Color(color) }, opacity: { value: 0 } };
+    this.mesh = new THREE.Mesh(g, new THREE.ShaderMaterial({ vertexShader: FALL_VS, fragmentShader: FALL_FS, uniforms: this.u, transparent: true, depthTest: false, depthWrite: false }));
+    this.mesh.frustumCulled = false; this.mesh.visible = false;
+  }
+  // slant: sideways drift for each unit of fall. speed: screen heights a second. amount: share of the marks shown, 0 to 1.
+  set(dt, time, dx, dy, speed, amount, opacity, aspect) {
+    const l = Math.hypot(dx, dy) || 1, u = this.u; dx /= l; dy /= l;
+    u.dir.value.set(dx, dy); u.off.value.x = (u.off.value.x + (dx * speed * dt) / (2.3 * aspect)) % 64; u.off.value.y = (u.off.value.y + (dy * speed * dt) / 2.3) % 64;
+    u.amount.value = amount; u.opacity.value = opacity; u.aspect.value = aspect; u.time.value = time;
+    this.mesh.visible = amount > 0.004 && opacity > 0.004;
+  }
+}
+export class WeatherLayer {
+  constructor() {
+    this.scene = new THREE.Scene(); this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    this.rain = new Fall(1100, { len: 0.085, width: 0.0016, color: 0xd5dee8 });
+    this.snow = new Fall(900, { round: true, width: 0.0075, color: 0xffffff });
+    this.wind = new Fall(56, { len: 0.42, width: 0.0021, color: 0xffffff });
+    for (const f of [this.wind, this.rain, this.snow]) this.scene.add(f.mesh);
+  }
+  get active() { return this.rain.mesh.visible || this.snow.mesh.visible || this.wind.mesh.visible; }
+}
+
 // ---------- aircraft shapes ----------
-function pushGeo(arr, geo, m) {
-  const g = geo.index ? geo.toNonIndexed() : geo; if (m) g.applyMatrix4(m);
-  const p = g.attributes.position.array; for (let i = 0; i < p.length; i++) arr.push(p[i]);
+// Every aircraft shape is cut into paint zones. One number per corner says which zone it belongs to, and each aircraft
+// carries its own short list of colours, one per zone. That is how one shape wears many airlines.
+export const ZONES = ['top', 'belly', 'stripe', 'aft', 'glass', 'wing', 'eng', 'tip', 'tail0', 'tail1', 'tail2'];
+const ZI = {}; ZONES.forEach((z, i) => { ZI[z] = i; });
+const newG = () => ({ p: [], n: [], z: [] });
+function tri(G, zone, a, b, c, na, nb, nc) {
+  for (const [v, n] of [[a, na], [b, nb], [c, nc]]) { G.p.push(v.x, v.y, v.z); G.n.push(n.x, n.y, n.z); G.z.push(zone); }
+}
+const QN = new THREE.Vector3(), QA = new THREE.Vector3(), QB = new THREE.Vector3();
+function quad(G, zone, a, b, c, d) {
+  QN.crossVectors(QA.subVectors(b, a), QB.subVectors(d, a)).normalize(); const n = QN.clone();
+  tri(G, zone, a, b, c, n, n, n); tri(G, zone, a, c, d, n, n, n);
 }
 // a thin slab between four corner points, given thickness along t
-function slab(arr, A, B, C, D, t) {
+function slab(G, zone, A, B, C, D, t) {
   const h = new THREE.Vector3(...t).multiplyScalar(0.5);
   const P = [A, B, C, D].map((p) => new THREE.Vector3(...p));
   const top = P.map((p) => p.clone().add(h)), bot = P.map((p) => p.clone().sub(h));
-  const quad = (a, b, c, d) => { for (const v of [a, b, c, a, c, d]) arr.push(v.x, v.y, v.z); };
-  quad(top[0], top[1], top[2], top[3]); quad(bot[3], bot[2], bot[1], bot[0]);
-  for (let i = 0; i < 4; i++) { const j = (i + 1) % 4; quad(top[j], top[i], bot[i], bot[j]); }
+  quad(G, zone, top[0], top[1], top[2], top[3]); quad(G, zone, bot[3], bot[2], bot[1], bot[0]);
+  for (let i = 0; i < 4; i++) { const j = (i + 1) % 4; quad(G, zone, top[j], top[i], bot[i], bot[j]); }
 }
-function body(arr, profile, seg = 14) {
-  const pts = profile.map(([z, r]) => new THREE.Vector2(r, z));
-  const g = new THREE.LatheGeometry(pts, seg); g.rotateX(Math.PI / 2);
-  pushGeo(arr, g);
+function pushGeo(G, zone, geo) {
+  const g = geo.index ? geo.toNonIndexed() : geo; const p = g.attributes.position.array, n = g.attributes.normal.array;
+  for (let i = 0; i < p.length; i++) { G.p.push(p[i]); G.n.push(n[i]); } for (let i = 0; i < p.length / 3; i++) G.z.push(zone);
 }
-function finish(bodyArr, accentArr) {
-  const g = new THREE.BufferGeometry(), all = new Float32Array(bodyArr.length + accentArr.length);
-  all.set(bodyArr, 0); all.set(accentArr, bodyArr.length);
-  g.setAttribute('position', new THREE.BufferAttribute(all, 3));
-  g.addGroup(0, bodyArr.length / 3, 0); g.addGroup(bodyArr.length / 3, accentArr.length / 3, 1);
-  g.computeVertexNormals(); g.computeBoundingSphere();
+// A round body from tail to nose. profile rows are [z, radius, height of the centre line].
+// Paint zones follow the way real aircraft are painted: upper body, a stripe at window height, belly, the rear body, the windshield.
+function fuselage(G, profile, { seg = 20, aftZ = -0.26, glass = null, stripe = [90, 108] } = {}) {
+  const ring = (i, j) => {
+    const [z, r, yc = 0] = profile[i], a = (j / seg) * Math.PI * 2;
+    const k0 = profile[Math.max(i - 1, 0)], k1 = profile[Math.min(i + 1, profile.length - 1)], slope = (k1[1] - k0[1]) / Math.max(k1[0] - k0[0], 1e-6);
+    return { v: new THREE.Vector3(r * Math.sin(a), yc + r * Math.cos(a), z), n: new THREE.Vector3(Math.sin(a), Math.cos(a), -slope).normalize() };
+  };
+  for (let i = 0; i < profile.length - 1; i++) for (let j = 0; j < seg; j++) {
+    const a = ring(i, j), b = ring(i, j + 1), c = ring(i + 1, j + 1), d = ring(i + 1, j);
+    let deg = ((j + 0.5) / seg) * 360; if (deg > 180) deg = 360 - deg;     // 0 is the top of the body, 180 the bottom
+    const zm = (profile[i][0] + profile[i + 1][0]) / 2;
+    let zone = deg < stripe[0] ? ZI.top : deg < stripe[1] ? ZI.stripe : ZI.belly;
+    if (zm < aftZ && zone !== ZI.belly) zone = ZI.aft;
+    if (glass && zm > glass[0] && zm < glass[1] && deg < glass[2]) zone = ZI.glass;
+    tri(G, zone, a.v, c.v, b.v, a.n, c.n, b.n); tri(G, zone, a.v, d.v, c.v, a.n, d.n, c.n);
+  }
+}
+// the tail fin, cut into three bands from bottom to top so a tail can carry up to three colours
+function fin(G, fb, rb, rt, ft, thick = 0.012) {
+  const mix = (p, q, k) => [p[0] + (q[0] - p[0]) * k, p[1] + (q[1] - p[1]) * k, p[2] + (q[2] - p[2]) * k];
+  const cuts = [0, 0.4, 0.72, 1];
+  for (let b = 0; b < 3; b++) slab(G, ZI.tail0 + b, mix(fb, ft, cuts[b]), mix(rb, rt, cuts[b]), mix(rb, rt, cuts[b + 1]), mix(fb, ft, cuts[b + 1]), [thick, 0, 0]);
+}
+function finish(G) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(G.p), 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(G.n), 3));
+  g.setAttribute('zone', new THREE.BufferAttribute(new Float32Array(G.z), 1));
+  g.computeBoundingSphere();
   return g;
 }
 const mirror = (p) => [-p[0], p[1], p[2]];
+const both = (G, zone, pts, t) => { slab(G, zone, ...pts, t); slab(G, zone, ...pts.map(mirror).reverse(), t); };
 function jet(engines = 2) {
-  const b = [], a = [];
-  body(b, [[-0.5, 0.004], [-0.47, 0.016], [-0.36, 0.036], [-0.22, 0.05], [0.33, 0.05], [0.41, 0.044], [0.46, 0.031], [0.49, 0.014], [0.5, 0.0]]);
-  const wing = [[0.045, -0.03, 0.12], [0.045, -0.03, -0.07], [0.5, 0.015, -0.2], [0.5, 0.015, -0.145]];
-  slab(b, ...wing, [0, 0.012, 0]); slab(b, ...wing.map(mirror).reverse(), [0, 0.012, 0]);
-  const stab = [[0.02, 0.012, -0.37], [0.02, 0.012, -0.46], [0.19, 0.022, -0.5], [0.19, 0.022, -0.455]];
-  slab(b, ...stab, [0, 0.008, 0]); slab(b, ...stab.map(mirror).reverse(), [0, 0.008, 0]);
-  slab(a, [0, 0.04, -0.33], [0, 0.04, -0.475], [0, 0.2, -0.52], [0, 0.2, -0.455], [0.012, 0, 0]);
-  const eng = (x, z) => { const g = new THREE.CylinderGeometry(0.026, 0.022, 0.1, 10); g.rotateX(Math.PI / 2); g.translate(x, -0.058, z); pushGeo(a, g); };
+  const G = newG();
+  fuselage(G, [[-0.5, 0.004, 0.03], [-0.47, 0.016, 0.024], [-0.36, 0.036, 0.011], [-0.22, 0.05, 0], [0.33, 0.05, 0], [0.4, 0.045, -0.001], [0.435, 0.038, -0.004], [0.465, 0.028, -0.008], [0.49, 0.014, -0.012], [0.5, 0.0, -0.014]],
+    { glass: [0.4, 0.465, 64] });
+  both(G, ZI.wing, [[0.045, -0.03, 0.12], [0.045, -0.03, -0.07], [0.5, 0.015, -0.2], [0.5, 0.015, -0.145]], [0, 0.012, 0]);
+  both(G, ZI.tip, [[0.497, 0.017, -0.15], [0.497, 0.017, -0.2], [0.512, 0.07, -0.228], [0.512, 0.07, -0.2]], [0.006, 0, 0]);
+  both(G, ZI.wing, [[0.02, 0.03, -0.37], [0.02, 0.03, -0.46], [0.19, 0.04, -0.5], [0.19, 0.04, -0.455]], [0, 0.008, 0]);
+  fin(G, [0, 0.045, -0.33], [0, 0.04, -0.475], [0, 0.21, -0.52], [0, 0.21, -0.455]);
+  const eng = (x, z) => {
+    const g = new THREE.CylinderGeometry(0.026, 0.022, 0.1, 12); g.rotateX(Math.PI / 2); g.translate(x, -0.058, z); pushGeo(G, ZI.eng, g);
+    const d = new THREE.CircleGeometry(0.021, 12); d.translate(x, -0.058, z + 0.0506); pushGeo(G, ZI.glass, d);
+  };
   eng(0.17, 0.05); eng(-0.17, 0.05);
   if (engines === 4) { eng(0.31, -0.03); eng(-0.31, -0.03); }
-  return finish(b, a);
+  return finish(G);
 }
 function light() {
-  const b = [], a = [];
-  body(b, [[-0.5, 0.006], [-0.3, 0.022], [-0.05, 0.05], [0.2, 0.058], [0.36, 0.05], [0.46, 0.032], [0.5, 0.0]], 10);
-  const wing = [[0.0, 0.06, 0.2], [0.0, 0.06, 0.04], [0.62, 0.075, 0.06], [0.62, 0.075, 0.17]];
-  slab(b, ...wing, [0, 0.014, 0]); slab(b, ...wing.map(mirror).reverse(), [0, 0.014, 0]);
-  const stab = [[0.0, 0.01, -0.38], [0.0, 0.01, -0.48], [0.22, 0.01, -0.48], [0.22, 0.01, -0.41]];
-  slab(b, ...stab, [0, 0.01, 0]); slab(b, ...stab.map(mirror).reverse(), [0, 0.01, 0]);
-  slab(a, [0, 0.02, -0.34], [0, 0.02, -0.5], [0, 0.2, -0.52], [0, 0.2, -0.44], [0.012, 0, 0]);
-  return finish(b, a);
+  const G = newG();
+  fuselage(G, [[-0.5, 0.006, 0.012], [-0.3, 0.022, 0.006], [-0.05, 0.05, 0], [0.2, 0.058, 0], [0.36, 0.05, -0.004], [0.46, 0.032, -0.008], [0.5, 0.0, -0.01]], { seg: 12, aftZ: -9, glass: [0.05, 0.3, 62], stripe: [75, 105] });
+  both(G, ZI.wing, [[0.0, 0.06, 0.2], [0.0, 0.06, 0.04], [0.62, 0.075, 0.06], [0.62, 0.075, 0.17]], [0, 0.014, 0]);
+  both(G, ZI.tip, [[0.62, 0.075, 0.17], [0.62, 0.075, 0.06], [0.66, 0.078, 0.07], [0.66, 0.078, 0.16]], [0, 0.014, 0]);
+  both(G, ZI.wing, [[0.0, 0.02, -0.38], [0.0, 0.02, -0.48], [0.22, 0.02, -0.48], [0.22, 0.02, -0.41]], [0, 0.01, 0]);
+  fin(G, [0, 0.025, -0.34], [0, 0.02, -0.5], [0, 0.2, -0.52], [0, 0.2, -0.44]);
+  return finish(G);
 }
 function heli() {
-  const b = [], a = [];
-  body(b, [[-0.12, 0.02], [-0.02, 0.085], [0.14, 0.1], [0.3, 0.085], [0.4, 0.04], [0.42, 0.0]], 12);
-  body(b, [[-0.5, 0.008], [-0.1, 0.025]], 8);
-  slab(a, [0, 0.0, -0.44], [0, 0.0, -0.5], [0, 0.14, -0.52], [0, 0.14, -0.47], [0.012, 0, 0]);
-  const g = new THREE.CylinderGeometry(0.5, 0.5, 0.004, 28); g.translate(0, 0.13, 0.12); pushGeo(a, g);
-  return finish(b, a);
+  const G = newG();
+  fuselage(G, [[-0.12, 0.02, 0], [-0.02, 0.085, 0], [0.14, 0.1, 0], [0.3, 0.085, -0.004], [0.4, 0.04, -0.02], [0.42, 0.0, -0.024]], { seg: 14, aftZ: -9, glass: [0.2, 0.41, 80], stripe: [80, 108] });
+  fuselage(G, [[-0.5, 0.008, 0.03], [-0.1, 0.025, 0.01]], { seg: 8, aftZ: 9, stripe: [200, 200] });
+  fin(G, [0, 0.03, -0.42], [0, 0.03, -0.5], [0, 0.17, -0.53], [0, 0.17, -0.47]);
+  const mast = new THREE.CylinderGeometry(0.012, 0.012, 0.05, 6); mast.translate(0, 0.115, 0.12); pushGeo(G, ZI.glass, mast);
+  return finish(G);
+}
+function rotorGeo() {
+  const G = newG();
+  slab(G, 0, [-0.5, 0, 0.018], [-0.5, 0, -0.018], [0.5, 0, -0.018], [0.5, 0, 0.018], [0, 0.004, 0]);
+  slab(G, 0, [-0.018, 0, -0.5], [0.018, 0, -0.5], [0.018, 0, 0.5], [-0.018, 0, 0.5], [0, 0.004, 0]);
+  return finish(G);
 }
 let dot = null;
 function dotTexture() {
@@ -334,11 +443,12 @@ function dotTexture() {
   dot = new THREE.CanvasTexture(c); return dot;
 }
 const GEOS = {};
+// tips: wing tip lights. beacons: the red flashing lights, one on top of the tail fin and one under the belly.
 export const MODELS = {
-  jet: { make: () => jet(2), len: 1.0, tips: 0.5, tipY: 0.015, tipZ: -0.17, tail: -0.5 },
-  heavy: { make: () => jet(4), len: 1.45, tips: 0.5, tipY: 0.015, tipZ: -0.17, tail: -0.5 },
-  light: { make: light, len: 0.5, tips: 0.62, tipY: 0.075, tipZ: 0.11, tail: -0.5 },
-  heli: { make: heli, len: 0.5, tips: 0.1, tipY: 0.0, tipZ: 0.1, tail: -0.5 },
+  jet: { make: () => jet(2), len: 1.0, tips: 0.512, tipY: 0.05, tipZ: -0.2, tail: -0.5, tailY: 0.035, finTop: [0.225, -0.49], belly: [-0.062, 0.02] },
+  heavy: { make: () => jet(4), len: 1.45, tips: 0.512, tipY: 0.05, tipZ: -0.2, tail: -0.5, tailY: 0.035, finTop: [0.225, -0.49], belly: [-0.062, 0.02] },
+  light: { make: light, len: 0.5, tips: 0.66, tipY: 0.078, tipZ: 0.11, tail: -0.5, tailY: 0.02, finTop: [0.215, -0.48], belly: [-0.07, 0.1] },
+  heli: { make: heli, len: 0.5, tips: 0.1, tipY: 0.0, tipZ: 0.1, tail: -0.5, tailY: 0.03, finTop: [0.185, -0.5], belly: [-0.112, 0.14] },
 };
 export function modelFor(category, type) {
   const t = (type || '').toUpperCase();
@@ -348,39 +458,71 @@ export function modelFor(category, type) {
   if (category === 'A1' || /^(C1[5-9]\d|C2\d\d|P28|PA\d|SR2|DA4|BE3[3-6]|BE5|M20|C82|C72)/.test(t)) return 'light';
   return 'jet';
 }
+// One material per aircraft. The shader looks up each corner's zone in that aircraft's own list of colours.
+// The tail fin also glows a little at night, the way a real tail is lit by its logo lights.
+function paintMaterial(paint) {
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5, metalness: 0.05, transparent: true, fog: true });
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.paint = { value: paint };
+    sh.vertexShader = 'attribute float zone;\nuniform vec3 paint[' + ZONES.length + '];\nvarying vec3 vPaint;\nvarying float vLit;\n'
+      + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n  vPaint = paint[int(zone + 0.5)]; vLit = step(7.5, zone);');
+    sh.fragmentShader = 'varying vec3 vPaint;\nvarying float vLit;\n'
+      + sh.fragmentShader.replace('#include <color_fragment>', '#include <color_fragment>\n  diffuseColor.rgb *= vPaint;')
+        .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n  totalEmissiveRadiance *= vPaint * vLit;');
+  };
+  m.customProgramCacheKey = () => 'sky3d-paint';
+  return m;
+}
 export class PlaneMesh {
-  constructor(kind, accent) {
+  // paint: a list of colours, one per zone, in the order of ZONES
+  constructor(kind, paint) {
     const twin = kind === 'heavy2'; const key = twin ? 'jet' : kind; const m = MODELS[key];
-    this.model = m; this.len = twin ? 1.3 : m.len;
+    this.model = m; this.len = twin ? 1.3 : m.len; this.key = key;
     if (!GEOS[key]) GEOS[key] = m.make();
-    this.bodyMat = new THREE.MeshStandardMaterial({ color: 0xf7f8f8, roughness: 0.55, metalness: 0.05, flatShading: true, transparent: true, fog: true });
-    this.accentMat = new THREE.MeshStandardMaterial({ color: accent, roughness: 0.6, metalness: 0.05, flatShading: true, transparent: true, fog: true });
-    this.mesh = new THREE.Mesh(GEOS[key], [this.bodyMat, this.accentMat]); this.mesh.renderOrder = 10;
+    this.paint = paint.map((c) => new THREE.Color(c));
+    this.mat = paintMaterial(this.paint);
+    this.mesh = new THREE.Mesh(GEOS[key], this.mat); this.mesh.renderOrder = 10;
     this.group = new THREE.Group(); this.group.add(this.mesh); this.group.rotation.order = 'YXZ';
-    const sp = (color, x, y, z, s) => {
-      const mat = new THREE.SpriteMaterial({ map: dotTexture(), color, transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, fog: false });
+    this.rotor = null;
+    if (key === 'heli') {
+      if (!GEOS.rotor) GEOS.rotor = rotorGeo();
+      this.rotorMat = new THREE.MeshStandardMaterial({ color: 0x2a2f38, roughness: 0.7, transparent: true, fog: true });
+      this.rotor = new THREE.Mesh(GEOS.rotor, this.rotorMat); this.rotor.position.set(0, 0.142, 0.12); this.rotor.renderOrder = 10; this.group.add(this.rotor);
+    }
+    const sp = (color, x, y, z, s, additive = true) => {
+      const mat = new THREE.SpriteMaterial({ map: dotTexture(), color, transparent: true, depthWrite: false, depthTest: true, blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending, fog: false });
       const o = new THREE.Sprite(mat); o.position.set(x, y, z); o.scale.setScalar(s); o.renderOrder = 12; o.userData.s = s; this.group.add(o); return o;
     };
     this.red = sp(0xff3b30, m.tips, m.tipY, m.tipZ, 0.11); this.green = sp(0x30ff6a, -m.tips, m.tipY, m.tipZ, 0.11);
-    this.white = sp(0xffffff, 0, 0.03, m.tail, 0.1);
+    this.white = sp(0xffffff, 0, m.tailY, m.tail, 0.1);
     this.strobeL = sp(0xffffff, m.tips, m.tipY, m.tipZ, 0.34); this.strobeR = sp(0xffffff, -m.tips, m.tipY, m.tipZ, 0.34);
-    this.beacon = sp(0xff4030, 0, 0.075, 0.0, 0.2);
+    // The red beacons are drawn as solid red, not as added light, so they still read as red against a bright daytime sky.
+    this.beaconTop = sp(0xff1f14, 0, m.finTop[0], m.finTop[1], 0.2, false); this.beaconBelly = sp(0xff1f14, 0, m.belly[0], m.belly[1], 0.2, false);
+    this.glowTop = sp(0xff3a22, 0, m.finTop[0], m.finTop[1], 0.5); this.glowBelly = sp(0xff3a22, 0, m.belly[0], m.belly[1], 0.5);
+    this.sprites = [this.red, this.green, this.white, this.strobeL, this.strobeR, this.beaconTop, this.beaconBelly, this.glowTop, this.glowBelly];
     this.phase = Math.random() * 10;
   }
   // night: 0 day to 1 night. opacity: fade in and out. far: 0 near to 1 far (lights swell with distance so far aircraft stay visible as points)
   update(time, opacity, night, bodyColor, far) {
-    this.bodyMat.opacity = opacity; this.accentMat.opacity = opacity; this.bodyMat.color.copy(bodyColor);
-    this.accentMat.emissive.copy(this.accentMat.color).multiplyScalar(0.12 * night);
+    this.mat.opacity = opacity; this.mat.color.copy(bodyColor);
+    this.mat.emissive.setScalar(0.3 * night);
+    if (this.rotor) { this.rotorMat.opacity = opacity * 0.85; this.rotor.rotation.y = (time + this.phase) * 9.5; }
     const base = (0.12 + 0.88 * night) * opacity, swell = (0.55 + 0.45 * night) * (1 + far * 1.6 * night);
-    const t = (time + this.phase) % 1.6, flash = (t < 0.06 || (t > 0.18 && t < 0.24)) ? 1 : 0, bt = (time * 0.8 + this.phase) % 1.3, bflash = bt < 0.12 ? 1 : 0;
+    const t = (time + this.phase) % 1.6, flash = (t < 0.06 || (t > 0.18 && t < 0.24)) ? 1 : 0;
     this.red.material.opacity = base; this.green.material.opacity = base; this.white.material.opacity = base * 0.9;
     for (const s of [this.red, this.green, this.white]) s.scale.setScalar(s.userData.s * swell);
     this.strobeL.material.opacity = this.strobeR.material.opacity = flash * (0.07 + 0.93 * night) * opacity;
     this.strobeL.scale.setScalar(0.34 * swell); this.strobeR.scale.setScalar(0.34 * swell);
-    this.beacon.material.opacity = bflash * (0.06 + 0.94 * night) * opacity;
+    // red beacons: one flash a second, top and belly together, as bright by day as by night
+    const bt = (time + this.phase * 0.37) % 1.0, b = bt < 0.05 ? bt / 0.05 : bt < 0.13 ? 1 : bt < 0.3 ? 1 - (bt - 0.13) / 0.17 : 0;
+    const bs = (0.75 + 0.25 * night) * (1 + far * 1.2);
+    this.beaconTop.material.opacity = this.beaconBelly.material.opacity = b * opacity;
+    this.beaconTop.scale.setScalar(0.2 * bs); this.beaconBelly.scale.setScalar(0.2 * bs);
+    this.glowTop.material.opacity = this.glowBelly.material.opacity = b * opacity * (0.1 + 0.6 * night);
+    this.glowTop.scale.setScalar(0.5 * bs); this.glowBelly.scale.setScalar(0.5 * bs);
     this.mesh.visible = opacity > 0.01; this.group.visible = opacity > 0.01;
   }
-  dispose() { this.bodyMat.dispose(); this.accentMat.dispose(); for (const s of [this.red, this.green, this.white, this.strobeL, this.strobeR, this.beacon]) s.material.dispose(); }
+  dispose() { this.mat.dispose(); if (this.rotorMat) this.rotorMat.dispose(); for (const s of this.sprites) s.material.dispose(); }
 }
 
 // ---------- small text labels that stay the same size on screen ----------
