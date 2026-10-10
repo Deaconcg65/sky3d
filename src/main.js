@@ -15,7 +15,7 @@ const PRESETS = [
   ['MID', 'Midway between LaGuardia and Kennedy'], ['KJFK', 'Kennedy'], ['KLGA', 'LaGuardia'], ['KEWR', 'Newark'], ['KHPN', 'White Plains'],
   ['KBDR', 'Bridgeport'], ['KHVN', 'New Haven'], ['KISP', 'Islip'], ['KTEB', 'Teterboro'], ['KSWF', 'Stewart'], ['KBDL', 'Hartford Bradley'],
 ];
-const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true };
+const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr' };
 const S = Object.assign({}, DEFAULTS);
 try { Object.assign(S, JSON.parse(localStorage.getItem('sky3d') || '{}')); } catch (e) { /* storage unavailable */ }
 for (const k of Object.keys(DEFAULTS)) if (Q.has(k)) { const v = Q.get(k); S[k] = typeof DEFAULTS[k] === 'number' ? +v : typeof DEFAULTS[k] === 'boolean' ? v !== '0' && v !== 'false' : v; }
@@ -277,7 +277,7 @@ class Plane {
   fresh(t) { return this.lat !== null && t - this.tPos < (this.remote ? 45 : 20); }
 }
 
-const ARR3 = [0, 0, 0];
+const ARR3 = [0, 0, 0], P_F = new THREE.Vector3(), P_C = new THREE.Vector3();
 const P_E = new THREE.Vector3(), P_N = new THREE.Vector3(), P_U = new THREE.Vector3(), P_Nn = new THREE.Vector3(), P_M = new THREE.Matrix4(), P_Q = new THREE.Quaternion(), P_QL = new THREE.Quaternion(), P_EU = new THREE.Euler();
 function updatePlane(p, t, dt, night) {
   const target = p.fresh(t) ? 1 : 0;
@@ -314,7 +314,13 @@ function updatePlane(p, t, dt, night) {
   g.scale.setScalar(L); p.size = L;
   localFrame(p.rLat, p.rLon, p.rAlt, p.pos, P_E, P_N, P_U); P_M.makeBasis(P_E, P_U, P_Nn.copy(P_N).negate()); P_Q.setFromRotationMatrix(P_M);
   P_EU.set(-p.rPitch, Math.PI - p.rHdg * D2R, -p.rRoll, 'YXZ'); g.quaternion.copy(P_Q).multiply(P_QL.setFromEuler(P_EU));
-  p.mesh.update(t, p.opacity, night, look.body, clamp((dist - 20) / 150, 0, 1));
+  // Landing lights. The receiver does not say whether they are on, so they are judged from the flight itself: they come on when an
+  // aircraft is descending below 5,000 feet and stay on until it climbs away. They show only at dusk, at night and at dawn.
+  if (p.ground || p.altFt > 5500 || p.vrate > 500) p.landOn = false; else if (p.altFt < 5000 && p.vrate < -200) p.landOn = true;
+  const wantLights = S.lights === 'off' ? 0 : (p.landOn || (S.lights === 'both' && !p.ground && p.altFt < 5000 && p.altFt > 0)) ? smooth(clamp((night - 0.2) / 0.3, 0, 1)) : 0;
+  p.landLevel = lerp(p.landLevel || 0, wantLights, clamp(dt * 1.5, 0, 1)); if (p.landLevel < 0.005) p.landLevel = 0;
+  let ahead = 0; if (p.landLevel > 0) { P_F.set(0, 0, 1).applyQuaternion(g.quaternion); ahead = P_F.dot(P_C.copy(camera.position).sub(p.pos).normalize()); }
+  p.mesh.update(t, p.opacity, night, look.body, clamp((dist - 20) / 150, 0, 1), p.landLevel, ahead);
   // trail samples
   const last = p.trail[p.trail.length - 1];
   if (p.fresh(t) && (!last || t - last.t > 2.5)) p.trail.push({ t, lat: p.rLat, lon: p.rLon, alt: p.rAlt, v: new THREE.Vector3(), ep: -1 });
@@ -633,7 +639,7 @@ function applyCenter() {
 }
 function initPanel() {
   buildCenterOptions();
-  $('f-other').value = S.other; $('f-radius').value = String(S.radius); $('f-pace').value = String(S.pace); $('f-cap').checked = !!S.captions; $('f-sky').value = S.sky; $('f-wx').value = S.wx; $('f-corner').checked = !!S.corner; $('f-trail').value = String(S.trail); $('f-flight').value = S.follow || '';
+  $('f-other').value = S.other; $('f-radius').value = String(S.radius); $('f-pace').value = String(S.pace); $('f-cap').checked = !!S.captions; $('f-sky').value = S.sky; $('f-wx').value = S.wx; $('f-corner').checked = !!S.corner; $('f-lights').value = S.lights; $('f-trail').value = String(S.trail); $('f-flight').value = S.follow || '';
   $('f-center').onchange = (e) => { S.center = e.target.value; $('row-other').hidden = S.center !== 'OTHER'; save(); if (S.center !== 'OTHER' || AP[S.other.toUpperCase()] || AP['K' + S.other.toUpperCase()]) applyCenter(); };
   $('f-other').oninput = (e) => { S.other = e.target.value.trim().toUpperCase(); const ok = AP[S.other] || AP['K' + S.other]; $('other-note').textContent = ok ? ok[2] + (ok[3] ? ', ' + ok[3] : '') : (S.other.length >= 3 ? 'No airport found with that code' : ''); if (ok) { save(); applyCenter(); } };
   $('f-radius').onchange = (e) => { S.radius = +e.target.value; save(); ground.setRing(C.lat, C.lon, radiusKm());  };
@@ -642,6 +648,7 @@ function initPanel() {
   $('f-sky').onchange = (e) => { S.sky = e.target.value; save(); };
   $('f-wx').onchange = (e) => { S.wx = e.target.value; save(); if (S.wx === 'real') setWeather({}); applyWeather(); updateCorner(simClock || new Date()); };
   $('f-corner').onchange = (e) => { S.corner = e.target.checked; save(); };
+  $('f-lights').onchange = (e) => { S.lights = e.target.value; save(); };
   $('f-trail').onchange = (e) => { S.trail = +e.target.value; save(); };
   $('f-follow').onsubmit = (e) => { e.preventDefault(); setFollow($('f-flight').value); $('f-flight').blur(); };
   $('f-stop').onclick = () => setFollow('');

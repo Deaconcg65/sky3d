@@ -10,6 +10,11 @@ New in version 2:
 - Live weather for the place on screen: cloud, rain, snow, fog, wind and thunderstorms. Above the clouds, at cruising height, the sky clears.
 - A small readout in the corner gives the time, sunrise, sunset and weather. It can be switched off in the settings.
 
+New in version 2.1:
+
+- In the dark, the flashing lights light the aircraft itself. The white wing tip strobes brighten the wings and body for an instant and the red beacons throw a brief red wash on the tail and belly.
+- Landing lights with a beam, at dusk, at night and at dawn, on aircraft descending below 5,000 feet. A setting adds departures or switches them off. The receiver does not report lights, so this is judged from height and rate of descent.
+
 It is one self-contained page, `sky3d.html`. Nothing is installed. Put the page on the receiver's web server and open it.
 
 ## Install on a receiver that runs readsb with the tar1090 map page
@@ -41,7 +46,7 @@ Nothing from your antenna is sent anywhere. Three lookups go out:
     python3 tools/airports.py <folder of OurAirports csv files> build/airports.json
     node tools/build.js
 
-`tools/sim.js` is a stand-in receiver for testing. `tools/motion.js` drives the page with a step-by-step clock and measures how smooth the camera and aircraft are. `tools/paint.js` draws a line-up of aircraft in their paint. `tools/wx.js` checks each weather choice.
+`tools/sim.js` is a stand-in receiver for testing. `tools/motion.js` drives the page with a step-by-step clock and measures how smooth the camera and aircraft are. `tools/paint.js` draws a line-up of aircraft in their paint. `tools/wx.js` checks each weather choice. `tools/lights.js` checks the landing lights.
 
 To add or correct an airline's paint, edit the `LIVERY` table in `src/airlines.js`.
 

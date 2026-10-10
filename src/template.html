@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 2.
+  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 2.1.
   One self-contained page. Put it on the receiver's web server and open it in a browser.
   Includes three.js (c) 2010-2024 three.js authors, MIT License.
   Shorelines: GSHHG (Wessel and Smith, LGPL) and Natural Earth (public domain). State lines: United States Census Bureau.
@@ -117,6 +117,10 @@ body.panel #panel { transform: none; }
   <select id="f-wx"><option value="real">Follows the real weather</option><option value="clear">Always clear</option><option value="cloud">Partly cloudy</option><option value="overcast">Overcast</option><option value="rain">Rain</option><option value="storm">Thunderstorm</option><option value="snow">Snow</option><option value="wind">Windy</option><option value="fog">Fog</option></select>
   <div class="note">The real weather is for the place on screen. Weather data by <b>Open-Meteo.com</b>. The other choices are for trying each look.</div>
 
+  <label for="f-lights">Landing lights</label>
+  <select id="f-lights"><option value="arr">On aircraft coming in to land</option><option value="both">On arrivals and departures</option><option value="off">Off</option></select>
+  <div class="note">Shown at dusk, at night and at dawn on aircraft below 5,000 feet.</div>
+
   <label for="f-trail">Trail behind each aircraft</label>
   <select id="f-trail"><option value="0">None</option><option value="2">2 minutes</option><option value="5">5 minutes</option><option value="10">10 minutes</option></select>
 
@@ -131,7 +135,7 @@ body.panel #panel { transform: none; }
     <dt>F</dt><dd>Fill the screen</dd>
     <dt>S</dt><dd>Open or close these settings</dd>
   </dl>
-  <p class="note" style="margin-top:22px">Version 2, October 10, 2026</p>
+  <p class="note" style="margin-top:22px">Version 2.1, October 10, 2026</p>
 </aside>
 <script type="application/json" id="geo-data">/*GEO*/</script>
 <script type="application/json" id="airport-data">/*AIRPORTS*/</script>

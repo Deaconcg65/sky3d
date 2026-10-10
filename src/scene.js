@@ -460,19 +460,36 @@ export function modelFor(category, type) {
 }
 // One material per aircraft. The shader looks up each corner's zone in that aircraft's own list of colours.
 // The tail fin also glows a little at night, the way a real tail is lit by its logo lights.
-function paintMaterial(paint) {
-  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5, metalness: 0.05, transparent: true, fog: true });
-  m.onBeforeCompile = (sh) => {
-    sh.uniforms.paint = { value: paint };
-    sh.vertexShader = 'attribute float zone;\nuniform vec3 paint[' + ZONES.length + '];\nvarying vec3 vPaint;\nvarying float vLit;\n'
-      + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n  vPaint = paint[int(zone + 0.5)]; vLit = step(7.5, zone);');
-    sh.fragmentShader = 'varying vec3 vPaint;\nvarying float vLit;\n'
+function paintMaterial(paint, m) {
+  const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5, metalness: 0.05, transparent: true, fog: true });
+  // flash: x is how brightly the white wing tip strobes are lighting the aircraft right now, y the same for the red beacons
+  const u = mat.userData.u = { paint: { value: paint }, flash: { value: new THREE.Vector2() }, pTip: { value: new THREE.Vector3(m.tips, m.tipY, m.tipZ) },
+    pTop: { value: new THREE.Vector3(0, m.finTop[0], m.finTop[1]) }, pBelly: { value: new THREE.Vector3(0, m.belly[0], m.belly[1]) } };
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, u);
+    sh.vertexShader = 'attribute float zone;\nuniform vec3 paint[' + ZONES.length + '];\nvarying vec3 vPaint;\nvarying float vLit;\nvarying vec3 vObj;\nvarying vec3 vObjN;\n'
+      + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n  vPaint = paint[int(zone + 0.5)]; vLit = step(7.5, zone); vObj = position; vObjN = normal;');
+    // The aircraft's own lights fall on its own skin: each flash is a small lamp at the place the light sits, lighting the surfaces that face it.
+    sh.fragmentShader = 'varying vec3 vPaint;\nvarying float vLit;\nvarying vec3 vObj;\nvarying vec3 vObjN;\nuniform vec2 flash;\nuniform vec3 pTip;\nuniform vec3 pTop;\nuniform vec3 pBelly;\n'
+      + 'float lamp(vec3 at, float reach) { vec3 d = at - vObj; float l = length(d); return (0.22 + 0.78 * max(dot(normalize(vObjN), d / max(l, 0.0001)), 0.0)) / (1.0 + (l * l) / (reach * reach)); }\n'
       + sh.fragmentShader.replace('#include <color_fragment>', '#include <color_fragment>\n  diffuseColor.rgb *= vPaint;')
-        .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n  totalEmissiveRadiance *= vPaint * vLit;');
+        .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n  totalEmissiveRadiance *= vPaint * mix(0.34, 1.0, vLit);\n'
+          + '  vec3 skin = mix(vPaint, vec3(1.0), 0.3);\n'
+          + '  totalEmissiveRadiance += skin * vec3(1.0, 1.0, 1.0) * flash.x * (lamp(pTip, 0.26) + lamp(vec3(-pTip.x, pTip.y, pTip.z), 0.26));\n'
+          + '  totalEmissiveRadiance += skin * vec3(1.0, 0.16, 0.1) * flash.y * (lamp(pTop, 0.2) + lamp(pBelly, 0.22));');
   };
-  m.customProgramCacheKey = () => 'sky3d-paint';
-  return m;
+  mat.customProgramCacheKey = () => 'sky3d-paint-2';
+  return mat;
 }
+// the beam of the landing lights: a soft cone of light reaching ahead of the aircraft and a little downward
+let beamGeo = null;
+function beamGeometry() {
+  if (beamGeo) return beamGeo;
+  const g = new THREE.CylinderGeometry(0.012, 0.2, 1.25, 18, 1, true); g.translate(0, -0.625, 0); g.rotateX(-Math.PI / 2 + 0.07);   // apex at the lights, opening forward
+  beamGeo = g; return g;
+}
+const BEAM_VS = 'varying float vAlong; varying vec3 vN; varying vec3 vV; void main(){ vAlong = 1.0 - uv.y; vec4 mv = modelViewMatrix * vec4(position, 1.0); vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv; }';
+const BEAM_FS = 'uniform float opacity; varying float vAlong; varying vec3 vN; varying vec3 vV; void main(){ float edge = abs(dot(normalize(vN), normalize(vV))); float a = opacity * pow(1.0 - vAlong, 1.6) * smoothstep(0.0, 0.06, vAlong) * (0.35 + 0.65 * edge); gl_FragColor = vec4(1.0, 0.97, 0.9, a); }';
 export class PlaneMesh {
   // paint: a list of colours, one per zone, in the order of ZONES
   constructor(kind, paint) {
@@ -480,7 +497,7 @@ export class PlaneMesh {
     this.model = m; this.len = twin ? 1.3 : m.len; this.key = key;
     if (!GEOS[key]) GEOS[key] = m.make();
     this.paint = paint.map((c) => new THREE.Color(c));
-    this.mat = paintMaterial(this.paint);
+    this.mat = paintMaterial(this.paint, m);
     this.mesh = new THREE.Mesh(GEOS[key], this.mat); this.mesh.renderOrder = 10;
     this.group = new THREE.Group(); this.group.add(this.mesh); this.group.rotation.order = 'YXZ';
     this.rotor = null;
@@ -500,10 +517,21 @@ export class PlaneMesh {
     this.beaconTop = sp(0xff1f14, 0, m.finTop[0], m.finTop[1], 0.2, false); this.beaconBelly = sp(0xff1f14, 0, m.belly[0], m.belly[1], 0.2, false);
     this.glowTop = sp(0xff3a22, 0, m.finTop[0], m.finTop[1], 0.5); this.glowBelly = sp(0xff3a22, 0, m.belly[0], m.belly[1], 0.5);
     this.sprites = [this.red, this.green, this.white, this.strobeL, this.strobeR, this.beaconTop, this.beaconBelly, this.glowTop, this.glowBelly];
+    this.landing = null; this.landLevel = 0;   // landing lights are only made for an aircraft the first time it needs them
     this.phase = Math.random() * 10;
   }
+  makeLanding() {
+    const m = this.model, k = this.key, z = k === 'light' ? 0.215 : k === 'heli' ? 0.4 : 0.128, x = k === 'jet' || k === 'heavy' ? 0.075 : 0, y = k === 'light' ? 0.062 : k === 'heli' ? -0.06 : -0.034;
+    const mk = (px) => { const mat = new THREE.SpriteMaterial({ map: dotTexture(), color: 0xfff6e0, transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, fog: false, opacity: 0 });
+      const o = new THREE.Sprite(mat); o.position.set(px, y, z); o.renderOrder = 13; this.group.add(o); return o; };
+    const lamps = x ? [mk(x), mk(-x)] : [mk(0)];
+    const beamMat = new THREE.ShaderMaterial({ vertexShader: BEAM_VS, fragmentShader: BEAM_FS, uniforms: { opacity: { value: 0 } }, transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false });
+    const beam = new THREE.Mesh(beamGeometry(), beamMat); beam.position.set(0, y, z); beam.renderOrder = 11; this.group.add(beam);
+    this.landing = { lamps, beam, beamMat };
+  }
   // night: 0 day to 1 night. opacity: fade in and out. far: 0 near to 1 far (lights swell with distance so far aircraft stay visible as points)
-  update(time, opacity, night, bodyColor, far) {
+  // landing: 0 to 1, how far the landing lights are switched on. ahead: 1 when the camera is straight in front of the nose, -1 when straight behind.
+  update(time, opacity, night, bodyColor, far, landing = 0, ahead = 0) {
     this.mat.opacity = opacity; this.mat.color.copy(bodyColor);
     this.mat.emissive.setScalar(0.3 * night);
     if (this.rotor) { this.rotorMat.opacity = opacity * 0.85; this.rotor.rotation.y = (time + this.phase) * 9.5; }
@@ -520,9 +548,22 @@ export class PlaneMesh {
     this.beaconTop.scale.setScalar(0.2 * bs); this.beaconBelly.scale.setScalar(0.2 * bs);
     this.glowTop.material.opacity = this.glowBelly.material.opacity = b * opacity * (0.1 + 0.6 * night);
     this.glowTop.scale.setScalar(0.5 * bs); this.glowBelly.scale.setScalar(0.5 * bs);
+    // the flashes light the aircraft itself, more as the sky darkens and not at all by day
+    const dark = night * night * (3 - 2 * night);
+    this.mat.userData.u.flash.value.set(flash * dark * 0.8, b * dark * 0.55);
+    // landing lights: a hard white glare from ahead, a softer glow from the side, and a beam reaching forward
+    if (landing > 0.01 && !this.landing) this.makeLanding();
+    if (this.landing) {
+      const L = this.landing, on = landing * opacity, front = Math.max(0, ahead), glare = 0.3 + 0.7 * front * front;
+      for (const o of L.lamps) { o.material.opacity = on * (0.45 + 0.55 * glare); o.scale.setScalar((0.16 + 0.5 * front * front * front) * (1 + far * 2.2)); o.visible = on > 0.01; }
+      L.beamMat.uniforms.opacity.value = on * 0.2 * (1 - 0.5 * front); L.beam.visible = on > 0.01;
+    }
     this.mesh.visible = opacity > 0.01; this.group.visible = opacity > 0.01;
   }
-  dispose() { this.mat.dispose(); if (this.rotorMat) this.rotorMat.dispose(); for (const s of this.sprites) s.material.dispose(); }
+  dispose() {
+    this.mat.dispose(); if (this.rotorMat) this.rotorMat.dispose(); for (const s of this.sprites) s.material.dispose();
+    if (this.landing) { for (const o of this.landing.lamps) o.material.dispose(); this.landing.beamMat.dispose(); }
+  }
 }
 
 // ---------- small text labels that stay the same size on screen ----------
