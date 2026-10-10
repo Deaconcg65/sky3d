@@ -1,0 +1,32 @@
+// A short list of airlines seen most often, with the colour used on the tail. Anything else falls back to the receiver's own tables.
+export const AIRLINES = {
+  AAL: ['AA', 'American Airlines', 0x2a6ebb], DAL: ['DL', 'Delta Air Lines', 0xc8102e], UAL: ['UA', 'United Airlines', 0x1b4f9c],
+  JBU: ['B6', 'JetBlue', 0x0a3fa8], SWA: ['WN', 'Southwest Airlines', 0xf2a900], NKS: ['NK', 'Spirit Airlines', 0xffe600],
+  FFT: ['F9', 'Frontier Airlines', 0x1f8a4c], ASA: ['AS', 'Alaska Airlines', 0x0b3d5b], HAL: ['HA', 'Hawaiian Airlines', 0x6a2c91],
+  AAY: ['G4', 'Allegiant Air', 0xf58220], SCX: ['SY', 'Sun Country Airlines', 0xf58220], MXY: ['MX', 'Breeze Airways', 0x2d6cdf],
+  VXP: ['XP', 'Avelo Airlines', 0x5b2d8e], RPA: ['YX', 'Republic Airways', 0x8a94a0], EDV: ['9E', 'Endeavor Air', 0xc8102e],
+  ENY: ['MQ', 'Envoy Air', 0x2a6ebb], JIA: ['OH', 'PSA Airlines', 0x2a6ebb], PDT: ['PT', 'Piedmont Airlines', 0x2a6ebb],
+  SKW: ['OO', 'SkyWest Airlines', 0x7a8793], ASH: ['YV', 'Mesa Airlines', 0x7a8793], GJS: ['G7', 'GoJet Airlines', 0x1b4f9c],
+  UCA: ['C5', 'CommuteAir', 0x1b4f9c], KAP: ['9K', 'Cape Air', 0x1c75bc], FDX: ['FX', 'FedEx', 0x4d148c], UPS: ['5X', 'UPS', 0x5a3a1e],
+  GTI: ['5Y', 'Atlas Air', 0x1b3a6b], ABX: ['GB', 'ABX Air', 0x8a94a0], ATN: ['8C', 'Air Transport International', 0x8a94a0],
+  ACA: ['AC', 'Air Canada', 0xd22630], JZA: ['QK', 'Jazz', 0xd22630], WJA: ['WS', 'WestJet', 0x00a9a5], POE: ['PD', 'Porter Airlines', 0x1d3557],
+  BAW: ['BA', 'British Airways', 0x1d3f7a], VIR: ['VS', 'Virgin Atlantic', 0xc8102e], EIN: ['EI', 'Aer Lingus', 0x008a5e],
+  DLH: ['LH', 'Lufthansa', 0x0a1d5c], AFR: ['AF', 'Air France', 0x1b3f8f], KLM: ['KL', 'KLM', 0x00a1de], SWR: ['LX', 'Swiss', 0xd22630],
+  AUA: ['OS', 'Austrian Airlines', 0xd22630], BEL: ['SN', 'Brussels Airlines', 0x1b3f8f], IBE: ['IB', 'Iberia', 0xd22630],
+  TAP: ['TP', 'TAP Air Portugal', 0x1f8a4c], ITY: ['AZ', 'ITA Airways', 0x0a3fa8], SAS: ['SK', 'SAS', 0x1b3a6b], FIN: ['AY', 'Finnair', 0x0b2a5b],
+  ICE: ['FI', 'Icelandair', 0x0a2d6e], NOZ: ['DY', 'Norwegian', 0xd22630], LOT: ['LO', 'LOT Polish Airlines', 0x1b3f8f],
+  THY: ['TK', 'Turkish Airlines', 0xc8102e], ELY: ['LY', 'El Al', 0x1b3f8f], UAE: ['EK', 'Emirates', 0xc8102e], QTR: ['QR', 'Qatar Airways', 0x6d0f3a],
+  ETD: ['EY', 'Etihad Airways', 0xb8975a], SVA: ['SV', 'Saudia', 0x1f8a4c], RJA: ['RJ', 'Royal Jordanian', 0x3a3a3a], MSR: ['MS', 'EgyptAir', 0x1b3a6b],
+  ETH: ['ET', 'Ethiopian Airlines', 0x1f8a4c], RAM: ['AT', 'Royal Air Maroc', 0xc8102e], AIC: ['AI', 'Air India', 0xc8102e],
+  CPA: ['CX', 'Cathay Pacific', 0x00645a], SIA: ['SQ', 'Singapore Airlines', 0x1b3a6b], JAL: ['JL', 'Japan Airlines', 0xc8102e],
+  ANA: ['NH', 'All Nippon Airways', 0x1b4f9c], KAL: ['KE', 'Korean Air', 0x6fb7d9], AAR: ['OZ', 'Asiana Airlines', 0x8a94a0],
+  CCA: ['CA', 'Air China', 0xc8102e], CES: ['MU', 'China Eastern', 0x1b3f8f], CSN: ['CZ', 'China Southern', 0x00a1de], EVA: ['BR', 'EVA Air', 0x1f8a4c],
+  CAL: ['CI', 'China Airlines', 0x6a2c91], QFA: ['QF', 'Qantas', 0xd22630], ANZ: ['NZ', 'Air New Zealand', 0x1c1c1c],
+  AMX: ['AM', 'Aeromexico', 0x0b2a5b], VOI: ['Y4', 'Volaris', 0x6a2c91], AVA: ['AV', 'Avianca', 0xd22630], CMP: ['CM', 'Copa Airlines', 0x1b4f9c],
+  TAM: ['LA', 'LATAM', 0x1b1464], LAN: ['LA', 'LATAM', 0x1b1464], AZU: ['AD', 'Azul', 0x0a3fa8], BWA: ['BW', 'Caribbean Airlines', 0x00a1de],
+  EJA: ['', 'NetJets', 0x3a3a3a], LXJ: ['', 'Flexjet', 0x7a1f2b], JRE: ['', 'flyExclusive', 0x3a3a3a], EJM: ['', 'Executive Jet Management', 0x3a3a3a],
+  VJA: ['', 'Vista America', 0xb0b0b0], TWY: ['', 'Sun Air Jets', 0x3a3a3a], XOJ: ['', 'XOJET', 0x3a3a3a], WUP: ['', 'Wheels Up', 0x1b3a6b],
+  CNS: ['', 'PlaneSense', 0x1b4f9c], LBQ: ['', 'Quest Diagnostics', 0x1f8a4c], TIV: ['', 'Tradewind Aviation', 0x1b4f9c], BTQ: ['', 'Blade', 0x1c1c1c],
+};
+export const IATA2ICAO = {};
+for (const k of Object.keys(AIRLINES)) { const i = AIRLINES[k][0]; if (i && !IATA2ICAO[i]) IATA2ICAO[i] = k; }
