@@ -6,7 +6,15 @@ It is one self-contained page, `sky3d.html`. Nothing is installed. Put the page 
 
 ## Install on a receiver that runs readsb with the tar1090 map page
 
-Copy `sky3d.html` to `/var/www/html/sky/index.html` on the receiver, then open `http://<receiver address>/sky/`.
+Log in to the receiver and run this one line. It also updates an existing copy to the latest version.
+
+    sudo mkdir -p /var/www/html/sky && sudo wget -O /var/www/html/sky/index.html https://raw.githubusercontent.com/Deaconcg65/sky3d/main/sky3d.html
+
+Then open `http://<receiver address>/sky/` in a browser on the same network.
+
+It starts centered between LaGuardia and Kennedy in New York. If you are somewhere else, press S, choose "Another airport" under "Center the sky on", and type your airport code.
+
+To remove it: `sudo rm -r /var/www/html/sky`
 
 The page reads `/tar1090/data/aircraft.json` once a second. It also looks in `/data/` and `/skyaware/data/`, so a dump1090-fa receiver works too. To point it somewhere else, add `?data=/some/path/` to the address.
 
