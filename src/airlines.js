@@ -88,7 +88,7 @@ export const LIVERY = {
 LIVERY.LAN = LIVERY.TAM;
 // Regional airlines that always fly in one partner's colours. Republic, SkyWest and Mesa fly for several airlines and the
 // callsign does not say which, so they stay neutral.
-const PAINT_AS = { EDV: 'DAL', ENY: 'AAL', JIA: 'AAL', PDT: 'AAL', GJS: 'UAL', UCA: 'UAL', JZA: 'ACA' };
+export const PAINT_AS = { EDV: 'DAL', ENY: 'AAL', JIA: 'AAL', PDT: 'AAL', GJS: 'UAL', UCA: 'UAL', JZA: 'ACA' };
 const GA = [0xb5202e, 0x1f4e8c, 0x7a1f2b, 0x1f6a4c, 0x1c1c1c, 0xc46a1b];   // small private aircraft: white with one trim colour
 
 // The list of colours for one aircraft, in the order of ZONES in scene.js.

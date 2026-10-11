@@ -75,6 +75,8 @@ class Relay(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split('?', 1)[0]
+        if path.startswith('/sky-relay'):   # when the page is shared through a secure tunnel, the relay is reached under this name
+            path = path[len('/sky-relay'):] or '/'
         if path == '/':
             return self.reply(200, '3D sky relay is running.', 'text/plain; charset=utf-8')
         if path == '/check':   # which flight networks answer this relay, asked for the sky over New York

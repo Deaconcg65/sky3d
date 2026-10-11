@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { R_EARTH, FT, KT, MI, D2R, clamp, lerp, smooth, angDiff, lerpAng, gcDist, bearing, sunPosition, sunTimes, fmtInt, prettyType } from './util.js';
 import { VEX, proj, setOrigin, project, localFrame, Segments, Ground, Sky, WeatherLayer, PlaneMesh, modelFor, makeLabel } from './scene.js';
-import { AIRLINES, IATA2ICAO, paintFor } from './airlines.js';
+import { AIRLINES, IATA2ICAO, PAINT_AS, paintFor } from './airlines.js';
 
 const Q = new URLSearchParams(location.search);
 // __NET__ is set when the page is built: true in the network edition, false in the home edition.
@@ -19,15 +19,27 @@ const PRESETS = [
 ];
 if (__NET__) PRESETS.push(['KBOS', 'Boston'], ['KPHL', 'Philadelphia'], ['KDCA', 'Washington National'], ['KATL', 'Atlanta'], ['KMIA', 'Miami'], ['KORD', 'Chicago O\'Hare'], ['KDFW', 'Dallas Fort Worth'],
   ['KDEN', 'Denver'], ['KLAX', 'Los Angeles'], ['KSFO', 'San Francisco'], ['KSEA', 'Seattle']);
-const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr', src: 'blend', relay: '', netmax: 130 };
+const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr', src: 'blend', relay: '', netmax: 130, places: [] };
 const S = Object.assign({}, DEFAULTS);
 try { Object.assign(S, JSON.parse(localStorage.getItem('sky3d') || '{}')); } catch (e) { /* storage unavailable */ }
-for (const k of Object.keys(DEFAULTS)) if (Q.has(k)) { const v = Q.get(k); S[k] = typeof DEFAULTS[k] === 'number' ? +v : typeof DEFAULTS[k] === 'boolean' ? v !== '0' && v !== 'false' : v; }
+for (const k of Object.keys(DEFAULTS)) if (Q.has(k) && typeof DEFAULTS[k] !== 'object') { const v = Q.get(k); S[k] = typeof DEFAULTS[k] === 'number' ? +v : typeof DEFAULTS[k] === 'boolean' ? v !== '0' && v !== 'false' : v; }
 const save = () => { try { localStorage.setItem('sky3d', JSON.stringify(S)); } catch (e) { /* ignore */ } };
 let home = null;   // receiver position, if the receiver has one set
+// The viewer's own places ("My House" and so on). They are kept in this browser only and are never sent anywhere.
+const placeList = () => (Array.isArray(S.places) ? S.places : []);
+// Reads a latitude and longitude as copied from Google Maps (40.6892, -74.0445) or Google Earth (40°41'21"N 74°02'40"W).
+function parseLatLon(text) {
+  const s = String(text || '').replace(/[\u2032\u2019]/g, "'").replace(/[\u2033\u201d]/g, '"').replace(/''/g, '"');
+  const re = /(-?\d+(?:\.\d+)?)\s*\u00b0?\s*(?:(\d+(?:\.\d+)?)\s*')?\s*(?:(\d+(?:\.\d+)?)\s*")?\s*([NSEWnsew])?/g, vals = [];
+  let m; while ((m = re.exec(s)) && vals.length < 3) { if (!m[0].trim()) { re.lastIndex++; continue; } const neg = m[1][0] === '-', v = Math.abs(+m[1]) + (+m[2] || 0) / 60 + (+m[3] || 0) / 3600, h = (m[4] || '').toUpperCase(); vals.push({ v: (neg || h === 'S' || h === 'W') ? -v : v, h }); }
+  if (vals.length !== 2) return null;
+  let [a, b] = vals; if ((a.h === 'E' || a.h === 'W') && (b.h === 'N' || b.h === 'S')) [a, b] = [b, a];
+  return Math.abs(a.v) <= 90 && Math.abs(b.v) <= 180 ? { lat: +a.v.toFixed(5), lon: +b.v.toFixed(5) } : null;
+}
 
 function centerPoint() {
   if (S.center === 'MID') { const a = AP.KJFK, b = AP.KLGA; return { lat: (a[4] + b[4]) / 2, lon: (a[5] + b[5]) / 2, name: 'New York', short: 'the midpoint of LaGuardia and Kennedy' }; }
+  if (/^P\d+$/.test(S.center)) { const pl = placeList()[+S.center.slice(1)]; if (pl) return { lat: pl.lat, lon: pl.lon, name: pl.n, short: pl.n }; }
   if (S.center === 'HOME' && home) return { lat: home.lat, lon: home.lon, name: 'home', short: 'home' };
   const code = S.center === 'OTHER' ? S.other.trim().toUpperCase() : S.center;
   const a = AP[code] || AP['K' + code];
@@ -76,6 +88,8 @@ function rebuildLabels() {
   for (const a of AIRPORTS) if (a[7] === 2 && a[1] && gcDist(proj.lat0, proj.lon0, a[4], a[5]) < 320) want.add(a[0]);
   const code = S.center === 'OTHER' ? S.other.trim().toUpperCase() : S.center; const ca = AP[code] || AP['K' + code]; if (ca) want.add(ca[0]);
   for (const id of want) { const a = AP[id]; const sprite = makeLabel(a[1] || a[0]); project(a[4], a[5], 0.05, sprite.position); labelLayer.add(sprite); labels.push({ sprite, a }); }
+  for (const pl of placeList()) if (gcDist(proj.lat0, proj.lon0, pl.lat, pl.lon) < 600) { const sprite = makeLabel(pl.n); project(pl.lat, pl.lon, 0.75, sprite.position); labelLayer.add(sprite); labels.push({ sprite, a: null }); }
+  ground.setMarks(placeList());
 }
 function reorigin(lat, lon) {
   setOrigin(lat, lon); ground.rebuild(); ground.setRing(C.lat, C.lon, radiusKm()); rebuildLabels();
@@ -378,7 +392,8 @@ const NET_CAP = 130;
 const DEFAULT_RELAY = '';
 const relayBase = () => {
   const r = (Q.get('relay') || S.relay || DEFAULT_RELAY || '').trim().replace(/\/+$/, ''); if (/^(https?:\/\/|\/)/.test(r)) return r;
-  return location.protocol === 'http:' && location.hostname ? 'http://' + location.hostname + ':8099' : '';
+  if (!location.hostname || /github\.io$/.test(location.hostname)) return '';   // a plain copy on a file host has no relay beside it
+  return location.protocol === 'https:' ? location.origin + '/sky-relay' : 'http://' + location.hostname + ':8099';   // through a secure tunnel the relay sits under the same address
 };
 const point = (base) => (la, lo, r) => base + 'point/' + la + '/' + lo + '/' + r;
 function netSources() {
@@ -387,7 +402,7 @@ function netSources() {
     { name: 'airplanes.live', every: 10, url: point('https://api.airplanes.live/v2/') },
     { name: 'adsb.fi', every: 10, url: (la, lo, r) => 'https://opendata.adsb.fi/api/v2/lat/' + la + '/lon/' + lo + '/dist/' + r },
   ];
-  const rb = relayBase(); return rb ? [{ name: 'the relay', every: 5, url: point(rb + '/v2/') }].concat(direct) : direct;
+  const rb = Q.has('netApi') && !Q.has('relay') ? '' : relayBase(); return rb ? [{ name: 'the relay', every: 5, url: point(rb + '/v2/') }].concat(direct) : direct;
 }
 const net = { i: 0, ok: null, last: -1e9, lastGood: -1e9, fails: 0, busy: false, name: '' };
 function netRadiusNm() { const mi = S.radius > 0 ? Math.max(S.radius * 1.5, 40) : 140; return Math.round(clamp(mi * 0.869, 35, 130)); }
@@ -635,6 +650,20 @@ function updateCamera(t) {
   sun.position.copy(sunDir).applyQuaternion(B_Q).multiplyScalar(1000).add(TV); sun.target.position.copy(TV);
 }
 
+// ---------- the nearest airport, and listening to its air traffic control ----------
+function nearestAirport(lat, lon, maxKm) {
+  let best = null, bd = maxKm;
+  for (const a of AIRPORTS) { if (!a[1] || Math.abs(a[4] - lat) > 1.2) continue; const d = gcDist(lat, lon, a[4], a[5]) * (a[7] === 2 ? 1 : 1.6); if (d < bd) { bd = d; best = a; } }   // a major airport wins over a small field a little closer
+  return best;
+}
+// The page does not play the audio itself: LiveATC's streams are theirs. The control opens LiveATC's own page for the airport in a new tab.
+let listenAp = null;
+function updateListen() {
+  listenAp = nearestAirport(pose.lat, pose.lon, 90); const b = $('listen'), text = listenAp ? 'Listen to ' + (listenAp[1] || listenAp[0]) : '';
+  if (b._t !== text) { b._t = text; b.textContent = text; b.hidden = !text; if (listenAp) b.title = 'Opens LiveATC.net for ' + listenAp[2] + ' in a new tab'; }
+}
+function openListen() { if (listenAp) window.open('https://www.liveatc.net/search/?icao=' + encodeURIComponent(listenAp[0]), '_blank', 'noopener'); }
+
 // ---------- caption ----------
 let capPlane = null, capShown = false, capRoute = null, capInfo = null;
 function hideCaption() { capShown = false; $('cap').classList.remove('on'); }
@@ -650,10 +679,19 @@ function updateCaption(t) {
   const show = active && S.captions && (t - shot.t0) > shot.dur * 0.55;
   if (show) {
     const cs = p.callsign(), al = airlineName(cs), info = capInfo || {};
-    $('c-air').textContent = al || (cs ? '' : 'Unidentified aircraft');
-    $('c-flight').textContent = cs ? cs.replace(/^([A-Z]{3})(\d)/, '$1 $2') : (info.reg || p.hex.toUpperCase());
-    let route = '';
-    if (capRoute) { const ap = capRoute._airports, a = ap[0], b = ap[ap.length - 1]; route = `${esc(placeName(a))} <i>${esc(a.iata || a.icao)}</i> <span>to</span> ${esc(placeName(b))} <i>${esc(b.iata || b.icao)}</i>`; }
+    // A regional airline that flies for one partner only is shown the way its passengers know it: the partner's name and flight number.
+    const own = /^[A-Z]{3}\d/.test(cs) ? cs.slice(0, 3) : '', partner = own && PAINT_AS[own] && AIRLINES[PAINT_AS[own]];
+    $('c-air').textContent = partner ? partner[1] + ', operated by ' + (AIRLINES[own] ? AIRLINES[own][1] : own) : al || (cs ? '' : 'Unidentified aircraft');
+    $('c-flight').textContent = cs ? (partner ? partner[0] + ' ' + cs.slice(3) : cs.replace(/^([A-Z]{3})(\d)/, '$1 $2')) : (info.reg || p.hex.toUpperCase());
+    let route = '', rt = capRoute;
+    // The route table is kept by volunteers and listed by callsign, and airlines reuse flight numbers, so it is sometimes wrong.
+    // An aircraft low to the ground has to be near one end of its route. If it is near neither, the route on file is not this flight's.
+    if (rt && !p.ground && p.altFt < 6000) { const ap = rt._airports, a = ap[0], b = ap[ap.length - 1]; if (gcDist(a.lat, a.lon, p.rLat, p.rLon) > 120 && gcDist(b.lat, b.lon, p.rLat, p.rLon) > 120) rt = null; }
+    if (!rt && !p.ground && p.altFt < 4500) {   // no route to trust, but low beside an airport: say what can be seen
+      const near = nearestAirport(p.rLat, p.rLon, 32);
+      if (near) route = `<span style="margin-left:0">${p.vrate < -200 ? 'Arriving at' : p.vrate > 300 ? 'Departing' : 'Near'}</span> ${esc(near[3] || near[2])} <i>${esc(near[1] || near[0])}</i>`;
+    }
+    if (rt) { const ap = rt._airports, a = ap[0], b = ap[ap.length - 1]; route = `${esc(placeName(a))} <i>${esc(a.iata || a.icao)}</i> <span>to</span> ${esc(placeName(b))} <i>${esc(b.iata || b.icao)}</i>`; }
     if ($('c-route')._h !== route) { $('c-route').innerHTML = route; $('c-route')._h = route; }
     const trend = p.vrate > 350 ? 'climbing' : p.vrate < -350 ? 'descending' : '';
     const bits = [];
@@ -664,15 +702,15 @@ function updateCaption(t) {
     if ($('c-data')._h !== h) { $('c-data').innerHTML = h; $('c-data')._h = h; }
     if (__NET__) { const mark = dataBase && S.src === 'blend' && !p.remote ? (p.tAnt && t - p.tAnt < 20 ? 'Heard by your antenna' : 'From the flight network') : ''; const n = $('c-src'); if (n._t !== mark) { n._t = mark; n.textContent = mark; n.hidden = !mark; } }
     let prog = '';
-    if (shot.kind === 'follow' && capRoute) {
-      const ap = capRoute._airports, a = ap[0], b = ap[ap.length - 1];
+    if (shot.kind === 'follow' && rt) {
+      const ap = rt._airports, a = ap[0], b = ap[ap.length - 1];
       const done = gcDist(a.lat, a.lon, p.rLat, p.rLon), left = gcDist(p.rLat, p.rLon, b.lat, b.lon), frac = clamp(done / Math.max(done + left, 1), 0, 1);
       $('c-bar').style.width = (frac * 100).toFixed(1) + '%';
       const mins = p.gs > 60 ? (left / (p.gs * 1.852)) * 60 : null;
       prog = `${fmtInt(left / MI)} miles to go` + (mins ? `, about ${mins >= 90 ? (mins / 60).toFixed(1).replace('.0', '') + ' hours' : fmtInt(Math.max(mins, 1)) + ' minutes'}` : '');
       if (p.remote) prog += '. Beyond your antenna, position from ADSB.lol';
     } else if (shot.kind === 'follow' && p.remote) prog = 'Beyond your antenna, position from ADSB.lol';
-    $('c-prog').hidden = !(shot.kind === 'follow' && capRoute); $('c-progtext').textContent = prog; $('c-progtext').hidden = !prog;
+    $('c-prog').hidden = !(shot.kind === 'follow' && rt); $('c-progtext').textContent = prog; $('c-progtext').hidden = !prog;
   }
   if (show !== capShown) { capShown = show; $('cap').classList.toggle('on', show); }
   // quiet status line
@@ -691,11 +729,35 @@ function updateCaption(t) {
 function buildCenterOptions() {
   const sel = $('f-center'); sel.innerHTML = '';
   const add = (v, label) => { const o = document.createElement('option'); o.value = v; o.textContent = label; sel.appendChild(o); };
+  placeList().forEach((pl, i) => add('P' + i, pl.n));
   for (const [v, label] of PRESETS) add(v, label);
   if (home) add('HOME', 'Home');
   add('OTHER', 'Another airport');
   sel.value = S.center; if (sel.value !== S.center) { S.center = 'MID'; sel.value = 'MID'; }
   $('row-other').hidden = S.center !== 'OTHER';
+}
+function renderPlaces() {
+  const box = $('places'); box.innerHTML = '';
+  placeList().forEach((pl, i) => {
+    const row = document.createElement('div'); row.className = 'place';
+    const name = document.createElement('span'); name.textContent = pl.n; const where = document.createElement('small'); where.textContent = pl.lat.toFixed(4) + ', ' + pl.lon.toFixed(4);
+    const go = document.createElement('button'); go.type = 'button'; go.className = 'quiet'; go.textContent = 'Go there'; go.onclick = () => { S.center = 'P' + i; save(); buildCenterOptions(); applyCenter(); };
+    const del = document.createElement('button'); del.type = 'button'; del.className = 'quiet'; del.textContent = 'Remove'; del.setAttribute('aria-label', 'Remove ' + pl.n);
+    del.onclick = () => {
+      const cur = /^P\d+$/.test(S.center) ? +S.center.slice(1) : -1; S.places = placeList().filter((_, j) => j !== i);
+      if (cur === i) S.center = 'MID'; else if (cur > i) S.center = 'P' + (cur - 1);
+      save(); buildCenterOptions(); renderPlaces(); if (cur === i) applyCenter(); else rebuildLabels();
+    };
+    name.appendChild(where); row.appendChild(name); row.appendChild(go); row.appendChild(del); box.appendChild(row);
+  });
+}
+function addPlace() {
+  const ll = parseLatLon($('f-pll').value), note = $('places-note'), name = $('f-pname').value.trim().slice(0, 28) || 'My place';
+  if (!ll) { note.textContent = 'I could not read that as a latitude and longitude. It should look like 40.6892, -74.0445'; return; }
+  if (placeList().length >= 20) { note.textContent = 'That is the limit of 20 places. Remove one first.'; return; }
+  S.places = placeList().concat([{ n: name, lat: ll.lat, lon: ll.lon }]); save();
+  $('f-pname').value = ''; $('f-pll').value = ''; note.textContent = name + ' added. It is kept in this browser only.';
+  buildCenterOptions(); renderPlaces(); rebuildLabels();
 }
 function applyCenter() {
   if (__NET__) setTimeout(() => netTick(true), 50);
@@ -718,6 +780,8 @@ function initPanel() {
   if (__NET__) $('f-netmax').onchange = (e) => { S.netmax = +e.target.value; save(); netTick(true); };
   if (__NET__) $('f-src').onchange = (e) => { S.src = e.target.value; save(); netTick(true); updateCorner(simClock || new Date()); };
   $('f-trail').onchange = (e) => { S.trail = +e.target.value; save(); };
+  renderPlaces(); $('f-places').onsubmit = (e) => { e.preventDefault(); addPlace(); };
+  $('listen').onclick = () => openListen();
   $('f-follow').onsubmit = (e) => { e.preventDefault(); setFollow($('f-flight').value); $('f-flight').blur(); };
   $('f-stop').onclick = () => setFollow('');
   $('gear').onclick = () => togglePanel();
@@ -726,16 +790,25 @@ function initPanel() {
   const wake = () => { document.body.classList.add('awake'); clearTimeout(idle); idle = setTimeout(() => { if (!document.body.classList.contains('panel')) document.body.classList.remove('awake'); }, 3500); };
   window.addEventListener('pointermove', wake); window.addEventListener('pointerdown', wake); window.addEventListener('keydown', wake);
   window.addEventListener('keydown', (e) => {
-    if (e.target && /INPUT|SELECT/.test(e.target.tagName)) { if (e.key === 'Escape') togglePanel(false); return; }
+    // Keys pressed while a setting has the keyboard: in a box you type into, every key is typing, so only Escape closes the panel.
+    // On a menu, a checkbox or a button, S and Escape still close the panel, and every other key is left for the control itself.
+    const el = e.target, tag = el && el.tagName, typing = tag === 'INPUT' && el.type !== 'checkbox';
+    if (typing) { if (e.key === 'Escape') togglePanel(false); return; }
+    if (tag === 'SELECT' || tag === 'INPUT' || tag === 'BUTTON') { if (e.key === 's' || e.key === 'S' || e.key === 'Escape') { e.preventDefault(); togglePanel(e.key === 'Escape' ? false : undefined); } return; }
     if (e.key === ' ') { paused = !paused; e.preventDefault(); }
     else if (e.key === 'ArrowRight' || e.key === 'n') { paused = false; const p = pickNext(); if (p && follow.state !== 'on') startVisit(p); }
+    else if (e.key === 'l') openListen();
     else if (e.key === 'w') { paused = false; if (follow.state !== 'on') goWide(); }
     else if (e.key === 's' || e.key === 'Enter') togglePanel();
     else if (e.key === 'Escape') togglePanel(false);
     else if (e.key === 'f') { if (document.fullscreenElement) document.exitFullscreen(); else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {}); }
   });
 }
-function togglePanel(on) { const b = document.body; const next = on === undefined ? !b.classList.contains('panel') : on; b.classList.toggle('panel', next); if (next) b.classList.add('awake'); }
+function togglePanel(on) {
+  const b = document.body; const next = on === undefined ? !b.classList.contains('panel') : on; b.classList.toggle('panel', next); if (next) b.classList.add('awake');
+  // when the panel closes, take the keyboard back from whichever setting was last touched, so the space bar and the other keys work again
+  if (!next && document.activeElement && document.activeElement !== document.body && document.activeElement.blur) document.activeElement.blur();
+}
 
 // ---------- frame loop ----------
 let fpsN = 0, fpsT = nowS(), slow = 0;
@@ -746,7 +819,7 @@ function frame() {
   updateCamera(t);
   const date = simClock || new Date();
   updateLook(pose.lat, pose.lon, date); updateWeather(t, dt);
-  if (t - lookT > 2) { lookT = t; applyWeather(); updateCorner(date); }
+  if (t - lookT > 2) { lookT = t; applyWeather(); updateCorner(date); updateListen(); }
   sky.starU.time.value = t;
   trails.reset(); drops.reset();
   const trailSec = S.trail * 60;

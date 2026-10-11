@@ -2,6 +2,15 @@
 
 Live aircraft from a readsb or dump1090 receiver, drawn in three dimensions in a web browser. The camera glides from aircraft to aircraft, settles beside each one, then pulls back to the whole sky.
 
+New in version 3.4, both editions:
+
+- My places. In the settings, give a place a name and paste its latitude and longitude from Google Earth or Google Maps. It gets a label and a marker on the ground and joins the "Center the sky on" list. Places are kept in your browser only.
+- Listen. A button, and the L key, open LiveATC.net's own page for the airport nearest the view, in a new tab. The page does not play the audio itself.
+- A guard against wrong routes. The route table is kept by volunteers and listed by callsign, so it is sometimes wrong. An aircraft low to the ground that is near neither end of its listed route no longer shows that route. Low aircraft with no route show "Arriving at", "Departing" or "Near" the airport beside them.
+- Regional airlines that fly for one partner are shown by the partner's name and flight number, for example "Delta Air Lines, operated by Endeavor Air" and "DL 5123".
+
+Fixed in version 3.3.1: the S key now closes the settings panel after a setting has been changed, in both editions.
+
 New in version 3.3:
 
 - Network edition: a setting for the most aircraft to take from the flight network, from 25 to 130.

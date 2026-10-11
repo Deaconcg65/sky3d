@@ -157,7 +157,8 @@ export class Ground {
     this.runways = new Segments(8000, { width: 2.2, color: 0xfff1d6, opacity: 0.95, renderOrder: 5 });
     this.ring = new Segments(400, { width: 1.2, color: 0xffffff, opacity: 0.16, renderOrder: 5 });
     for (const s of [this.borders, this.coast, this.runways, this.ring]) this.group.add(s.mesh);
-    this.lines = [this.borders, this.coast, this.runways, this.ring];
+    this.marks = new Segments(2400, { width: 1.8, color: 0xffd08a, opacity: 0.95, renderOrder: 5 }); this.group.add(this.marks.mesh);   // the viewer's own places
+    this.lines = [this.borders, this.coast, this.runways, this.ring, this.marks];
     this.v = new THREE.Vector3();
   }
   rebuild() {
@@ -209,6 +210,22 @@ export class Ground {
       for (const r of ap[8]) { project(r[0], r[1], 0.02, a); project(r[2], r[3], 0.02, b); this.runways.add(a.x, a.y, a.z, b.x, b.y, b.z, 1, 1); }
     }
     this.coast.commit(); this.borders.commit(); this.runways.commit();
+  }
+  // a small ring on the ground and a thin pin standing on it, for each of the viewer's own places
+  setMarks(places) {
+    this.marks.reset();
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), n = 36, dr = 0.9 / R_EARTH;
+    for (const pl of places || []) {
+      if (gcDist(proj.lat0, proj.lon0, pl.lat, pl.lon) > 600) continue;
+      const p1 = pl.lat * D2R, pt = (i, out) => {
+        const br = (i / n) * Math.PI * 2, p2 = Math.asin(Math.sin(p1) * Math.cos(dr) + Math.cos(p1) * Math.sin(dr) * Math.cos(br));
+        const l2 = pl.lon * D2R + Math.atan2(Math.sin(br) * Math.sin(dr) * Math.cos(p1), Math.cos(dr) - Math.sin(p1) * Math.sin(p2));
+        return project(p2 / D2R, l2 / D2R, 0.02, out);
+      };
+      for (let i = 0; i < n; i++) { pt(i, a); pt(i + 1, b); this.marks.add(a.x, a.y, a.z, b.x, b.y, b.z, 1, 1); }
+      project(pl.lat, pl.lon, 0.02, a); project(pl.lat, pl.lon, 0.7, b); this.marks.add(a.x, a.y, a.z, b.x, b.y, b.z, 1, 0.5);
+    }
+    this.marks.commit();
   }
   setRing(lat, lon, radiusKm) {
     this.ring.reset();
