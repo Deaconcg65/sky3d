@@ -2,9 +2,9 @@
 
 Live aircraft from a readsb or dump1090 receiver, drawn in three dimensions in a web browser. The camera glides from aircraft to aircraft, settles beside each one, then pulls back to the whole sky.
 
-New in version 3.1:
+New in version 3.2:
 
-- The network edition reads the flight network through a relay, because browsers may not read it directly. See "The relay" below.
+- The network edition reads the flight network through a relay that runs on the receiver, because browsers may not read it directly and the networks turn away cloud hosting. See "The relay" below. Its install line now installs the page and the relay together.
 
 New in version 3:
 
@@ -31,7 +31,7 @@ It comes in two editions, built from the same source:
 
 Each edition is one self-contained page. Nothing is installed. Put the page on the receiver's web server and open it.
 
-A public copy of the network edition, with no antenna behind it, is at https://deaconcg65.github.io/sky3d/
+A copy of the network edition is published at https://deaconcg65.github.io/sky3d/ . Away from a receiver it cannot show aircraft, for the reason given under "The relay" below.
 
 ## Install on a receiver that runs readsb with the tar1090 map page
 
@@ -41,9 +41,9 @@ Home edition, your antenna only:
 
     sudo mkdir -p /var/www/html/sky && sudo wget -O /var/www/html/sky/index.html https://raw.githubusercontent.com/Deaconcg65/sky3d/main/sky3d.html
 
-Network edition, your antenna joined by the flight network:
+Network edition, your antenna joined by the flight network. This also installs the small relay it needs (see "The relay" below):
 
-    sudo mkdir -p /var/www/html/sky && sudo wget -O /var/www/html/sky/index.html https://raw.githubusercontent.com/Deaconcg65/sky3d/main/sky3d-network.html
+    wget -q -O /tmp/sky3d-install.sh https://raw.githubusercontent.com/Deaconcg65/sky3d/main/relay/install.sh && sudo bash /tmp/sky3d-install.sh
 
 Both lines put the page at the same address, so pick one. To change editions later, run the other line.
 
@@ -51,15 +51,17 @@ Then open `http://<receiver address>/sky/` in a browser on the same network.
 
 It starts centered between LaGuardia and Kennedy in New York. If you are somewhere else, press S, choose "Another airport" under "Center the sky on", and type your airport code.
 
-To remove it: `sudo rm -r /var/www/html/sky`
+To remove it: `sudo rm -r /var/www/html/sky`. If you installed the network edition, also remove its relay: `sudo systemctl disable --now sky3d-relay && sudo rm -r /etc/systemd/system/sky3d-relay.service /usr/local/lib/sky3d`
 
 The page reads `/tar1090/data/aircraft.json` once a second. It also looks in `/data/` and `/skyaware/data/`, so a dump1090-fa receiver works too. To point it somewhere else, add `?data=/some/path/` to the address.
 
 ## The relay (network edition only)
 
-Web browsers are not allowed to read the free flight networks directly, because those networks do not give web pages that permission. The network edition therefore reads them through a relay: a few lines of code, in `relay/worker.js`, that fetch the list and hand it on. It runs as a Cloudflare Worker on the free plan (100,000 requests a day at the time of writing) and passes on only three kinds of question: aircraft around a point, one flight by callsign, and one aircraft by registration. It tries four free flight networks in turn. Opening the relay's address followed by `/check` shows which of them are answering.
+Web browsers are not allowed to read the free flight networks directly, because those networks do not give web pages that permission. The network edition therefore reads them through a relay: a small helper, `relay/relay.py`, that runs on the receiver, fetches the list over your home internet connection, and hands it to the page. It listens on port 8099 inside your home network and passes on only three kinds of question: aircraft around a point, one flight by callsign, and one aircraft by registration. It tries four free flight networks in turn. Opening `http://<receiver address>:8099/check` shows which of them are answering.
 
-To run your own: create a free Cloudflare account, create a Worker, replace its code with the contents of `relay/worker.js`, and deploy it. Then open the network edition, press S, and paste the Worker's address into "Relay address". Without a relay the network edition still shows everything your own antenna hears.
+The relay has to run at home. The flight networks ration or refuse requests that come from shared cloud hosting, so a relay on a free cloud service does not work. For the same reason the public copy of the network edition cannot show aircraft by itself.
+
+The install line for the network edition, above, installs the page and the relay together. Without the relay the network edition still shows everything your own antenna hears.
 
 ## What leaves your network
 
@@ -67,7 +69,7 @@ Nothing from your antenna is sent anywhere, in either edition. These lookups go 
 
 - The route (origin and destination) of the aircraft being visited, from the adsb.im route service that the tar1090 map page also uses, with api.adsb.lol as a fallback.
 - In follow mode only, the position of the one flight you named, from api.adsb.lol, while it is beyond your antenna's reach.
-- Network edition only: the aircraft around the place on screen, from api.adsb.lol (with api.airplanes.live and opendata.adsb.fi as fallbacks). Only the centre of the view and a radius are sent. Choose "My antenna only" to switch this off. The home edition never makes this request.
+- Network edition only: the aircraft around the place on screen, fetched by the relay on your receiver from api.adsb.lol (with adsb.fi, airplanes.live and adsb.one as fallbacks). Only the centre of the view and a radius are sent. Choose "My antenna only" to switch this off. The home edition never makes this request.
 - The weather for the place on screen, from api.open-meteo.com. Only a position rounded to a quarter of a degree (about 17 miles) is sent. Choose "Always clear" under Weather in the settings to switch this off.
 
 ## Build from source

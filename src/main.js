@@ -371,10 +371,14 @@ function ingest(list, serverNow, kind = 0) {
 // Nothing from this receiver's antenna is sent to it.
 const NET_CAP = 130;
 // Web browsers are not allowed to read these flight networks directly, because the networks do not give pages that permission.
-// So the page goes through a relay: a few lines of code on a free hosting service that fetch the list and hand it on (see relay/worker.js).
-// DEFAULT_RELAY is the relay this copy uses unless another address is typed into the settings.
+// So the page goes through a relay: a small helper on the receiver (relay/relay.py) that fetches the list over the home
+// internet connection and hands it on. The relay has to run at home, because the networks turn away shared cloud hosting.
+// Unless another address is typed into the settings, the page looks for the relay on the receiver it was opened from, port 8099.
 const DEFAULT_RELAY = '';
-const relayBase = () => { const r = (Q.get('relay') || S.relay || DEFAULT_RELAY || '').trim().replace(/\/+$/, ''); return /^(https?:\/\/|\/)/.test(r) ? r : ''; };
+const relayBase = () => {
+  const r = (Q.get('relay') || S.relay || DEFAULT_RELAY || '').trim().replace(/\/+$/, ''); if (/^(https?:\/\/|\/)/.test(r)) return r;
+  return location.protocol === 'http:' && location.hostname ? 'http://' + location.hostname + ':8099' : '';
+};
 const point = (base) => (la, lo, r) => base + 'point/' + la + '/' + lo + '/' + r;
 function netSources() {
   const direct = [
@@ -673,7 +677,7 @@ function updateCaption(t) {
   // quiet status line
   let msg = '';
   const netOn = __NET__ && S.src !== 'antenna';
-  if (__NET__ && !dataBase && netOn) msg = net.ok === false ? (relayBase() || Q.has('netApi') ? 'The flight network is not answering. Trying again.' : 'The flight network cannot be read directly by a web browser. Open the settings and enter a relay address.') : '';
+  if (__NET__ && !dataBase && netOn) msg = net.ok === false ? (relayBase() || Q.has('netApi') ? 'The flight network is not answering. Trying again.' : 'This copy cannot reach the flight network by itself. The network edition needs its relay, which runs on a receiver at home.') : '';
   else if (!dataBase) msg = pollFails >= 2 ? (__NET__ ? 'No receiver found here. To watch without one, open the settings and choose the flight network under "Aircraft from".' : 'No receiver found. Open this page from the address of the Raspberry Pi, not from the downloaded file.') : '';
   else if (t - lastGood > 15 && !(netOn && net.ok)) msg = 'The receiver has stopped answering. Trying again.';
   else if (follow.want && follow.state === 'looking' && t - follow.since > 4) msg = follow.netOk ? `Looking for ${follow.want}. It is not in the air within reach yet.` : `Looking for ${follow.want} with your antenna only. The internet lookup did not answer.`;
@@ -699,7 +703,7 @@ function applyCenter() {
 }
 function initPanel() {
   buildCenterOptions();
-  $('f-other').value = S.other; $('f-radius').value = String(S.radius); $('f-pace').value = String(S.pace); $('f-cap').checked = !!S.captions; $('f-sky').value = S.sky; $('f-wx').value = S.wx; $('f-corner').checked = !!S.corner; $('f-lights').value = S.lights; if (__NET__) { $('f-src').value = S.src; $('f-relay').value = S.relay || ''; $('f-relay').placeholder = DEFAULT_RELAY || 'https://'; } $('f-trail').value = String(S.trail); $('f-flight').value = S.follow || '';
+  $('f-other').value = S.other; $('f-radius').value = String(S.radius); $('f-pace').value = String(S.pace); $('f-cap').checked = !!S.captions; $('f-sky').value = S.sky; $('f-wx').value = S.wx; $('f-corner').checked = !!S.corner; $('f-lights').value = S.lights; if (__NET__) { $('f-src').value = S.src; $('f-relay').value = S.relay || ''; $('f-relay').placeholder = relayBase() && !S.relay ? relayBase() : 'http://'; } $('f-trail').value = String(S.trail); $('f-flight').value = S.follow || '';
   $('f-center').onchange = (e) => { S.center = e.target.value; $('row-other').hidden = S.center !== 'OTHER'; save(); if (S.center !== 'OTHER' || AP[S.other.toUpperCase()] || AP['K' + S.other.toUpperCase()]) applyCenter(); };
   $('f-other').oninput = (e) => { S.other = e.target.value.trim().toUpperCase(); const ok = AP[S.other] || AP['K' + S.other]; $('other-note').textContent = ok ? ok[2] + (ok[3] ? ', ' + ok[3] : '') : (S.other.length >= 3 ? 'No airport found with that code' : ''); if (ok) { save(); applyCenter(); } };
   $('f-radius').onchange = (e) => { S.radius = +e.target.value; save(); ground.setRing(C.lat, C.lon, radiusKm());  };

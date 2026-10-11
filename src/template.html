@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3.1, /*EDITION*/.
+  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3.2, /*EDITION*/.
   One self-contained page. Put it on the receiver's web server and open it in a browser.
   Includes three.js (c) 2010-2024 three.js authors, MIT License.
   Shorelines: GSHHG (Wessel and Smith, LGPL) and Natural Earth (public domain). State lines: United States Census Bureau.
@@ -95,7 +95,7 @@ body.panel #panel { transform: none; }
 
   <label for="f-relay">Relay address</label>
   <input id="f-relay" type="text" autocomplete="off" spellcheck="false" style="text-transform:none">
-  <div class="note">Web browsers may not read the flight network directly, so it is fetched through a relay. Leave this empty to use the relay built into this copy, if it has one.</div>
+  <div class="note">Web browsers may not read the flight network directly, so it is fetched through a small relay that runs on your receiver. Leave this empty to use the relay on the receiver this page came from.</div>
 <!--/NET-->
 
   <label for="f-center">Center the sky on</label>
@@ -147,7 +147,7 @@ body.panel #panel { transform: none; }
     <dt>F</dt><dd>Fill the screen</dd>
     <dt>S</dt><dd>Open or close these settings</dd>
   </dl>
-  <p class="note" style="margin-top:22px">Version 3.1, /*EDITION*/, October 11, 2026</p>
+  <p class="note" style="margin-top:22px">Version 3.2, /*EDITION*/, October 11, 2026</p>
 </aside>
 <script type="application/json" id="geo-data">/*GEO*/</script>
 <script type="application/json" id="airport-data">/*AIRPORTS*/</script>
