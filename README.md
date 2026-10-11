@@ -57,7 +57,7 @@ The page reads `/tar1090/data/aircraft.json` once a second. It also looks in `/d
 
 ## The relay (network edition only)
 
-Web browsers are not allowed to read the free flight networks directly, because those networks do not give web pages that permission. The network edition therefore reads them through a relay: a few lines of code, in `relay/worker.js`, that fetch the list and hand it on. It runs as a Cloudflare Worker on the free plan (100,000 requests a day at the time of writing) and passes on only three kinds of question: aircraft around a point, one flight by callsign, and one aircraft by registration.
+Web browsers are not allowed to read the free flight networks directly, because those networks do not give web pages that permission. The network edition therefore reads them through a relay: a few lines of code, in `relay/worker.js`, that fetch the list and hand it on. It runs as a Cloudflare Worker on the free plan (100,000 requests a day at the time of writing) and passes on only three kinds of question: aircraft around a point, one flight by callsign, and one aircraft by registration. It tries four free flight networks in turn. Opening the relay's address followed by `/check` shows which of them are answering.
 
 To run your own: create a free Cloudflare account, create a Worker, replace its code with the contents of `relay/worker.js`, and deploy it. Then open the network edition, press S, and paste the Worker's address into "Relay address". Without a relay the network edition still shows everything your own antenna hears.
 

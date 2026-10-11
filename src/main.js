@@ -522,8 +522,8 @@ async function followTick() {
     try {
       const posApi = __NET__ && relayBase() && !Q.has('posApi') ? relayBase() + '/v2/' : POS_API;
       const d = await getJSON(posApi + 'callsign/' + encodeURIComponent(follow.want) + (MANUAL && fakeT ? '?t=' + fakeT : '')); follow.netOk = true;
-      let ac = (d.ac || []).filter((a) => a.lat != null);
-      if (!ac.length && /^[A-Z]-?[A-Z0-9]{3,5}$|^N\d/.test(follow.want)) { const d2 = await getJSON(posApi + 'reg/' + encodeURIComponent(follow.want)); ac = (d2.ac || []).filter((a) => a.lat != null); }
+      let ac = (d.ac || d.aircraft || []).filter((a) => a.lat != null);
+      if (!ac.length && /^[A-Z]-?[A-Z0-9]{3,5}$|^N\d/.test(follow.want)) { const d2 = await getJSON(posApi + 'reg/' + encodeURIComponent(follow.want)); ac = (d2.ac || d2.aircraft || []).filter((a) => a.lat != null); }
       if (ac.length) ingest([ac[0]], 0, 1);
     } catch (e) { follow.netOk = false; }
   }
