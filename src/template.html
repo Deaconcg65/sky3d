@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3.2, /*EDITION*/.
+  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3.3, /*EDITION*/.
   One self-contained page. Put it on the receiver's web server and open it in a browser.
   Includes three.js (c) 2010-2024 three.js authors, MIT License.
   Shorelines: GSHHG (Wessel and Smith, LGPL) and Natural Earth (public domain). State lines: United States Census Bureau.
@@ -93,6 +93,10 @@ body.panel #panel { transform: none; }
   <select id="f-src"><option value="blend">My antenna and the flight network</option><option value="antenna">My antenna only</option><option value="network">The flight network only</option></select>
   <div class="note">Your antenna comes first. The flight network fills in what it cannot hear, and is all there is when no receiver is in reach. Flight network data by <b>ADSB.lol</b>.</div>
 
+  <label for="f-netmax">Most aircraft to take from the flight network</label>
+  <select id="f-netmax"><option value="25">25</option><option value="50">50</option><option value="75">75</option><option value="100">100</option><option value="130">130, the most</option></select>
+  <div class="note">The nearest ones are kept. Aircraft your own antenna hears are always shown and do not count toward this. Choose fewer if the picture is not smooth.</div>
+
   <label for="f-relay">Relay address</label>
   <input id="f-relay" type="text" autocomplete="off" spellcheck="false" style="text-transform:none">
   <div class="note">Web browsers may not read the flight network directly, so it is fetched through a small relay that runs on your receiver. Leave this empty to use the relay on the receiver this page came from.</div>
@@ -147,7 +151,7 @@ body.panel #panel { transform: none; }
     <dt>F</dt><dd>Fill the screen</dd>
     <dt>S</dt><dd>Open or close these settings</dd>
   </dl>
-  <p class="note" style="margin-top:22px">Version 3.2, /*EDITION*/, October 11, 2026</p>
+  <p class="note" style="margin-top:22px">Version 3.3, /*EDITION*/, October 11, 2026</p>
 </aside>
 <script type="application/json" id="geo-data">/*GEO*/</script>
 <script type="application/json" id="airport-data">/*AIRPORTS*/</script>

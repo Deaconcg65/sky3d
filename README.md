@@ -2,6 +2,11 @@
 
 Live aircraft from a readsb or dump1090 receiver, drawn in three dimensions in a web browser. The camera glides from aircraft to aircraft, settles beside each one, then pulls back to the whole sky.
 
+New in version 3.3:
+
+- Network edition: a setting for the most aircraft to take from the flight network, from 25 to 130.
+- The corner count and the caption now credit your antenna with any aircraft it has heard in the last 20 seconds.
+
 New in version 3.2:
 
 - The network edition reads the flight network through a relay that runs on the receiver, because browsers may not read it directly and the networks turn away cloud hosting. See "The relay" below. Its install line now installs the page and the relay together.

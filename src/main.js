@@ -19,7 +19,7 @@ const PRESETS = [
 ];
 if (__NET__) PRESETS.push(['KBOS', 'Boston'], ['KPHL', 'Philadelphia'], ['KDCA', 'Washington National'], ['KATL', 'Atlanta'], ['KMIA', 'Miami'], ['KORD', 'Chicago O\'Hare'], ['KDFW', 'Dallas Fort Worth'],
   ['KDEN', 'Denver'], ['KLAX', 'Los Angeles'], ['KSFO', 'San Francisco'], ['KSEA', 'Seattle']);
-const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr', src: 'blend', relay: '' };
+const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr', src: 'blend', relay: '', netmax: 130 };
 const S = Object.assign({}, DEFAULTS);
 try { Object.assign(S, JSON.parse(localStorage.getItem('sky3d') || '{}')); } catch (e) { /* storage unavailable */ }
 for (const k of Object.keys(DEFAULTS)) if (Q.has(k)) { const v = Q.get(k); S[k] = typeof DEFAULTS[k] === 'number' ? +v : typeof DEFAULTS[k] === 'boolean' ? v !== '0' && v !== 'false' : v; }
@@ -226,7 +226,7 @@ function updateCorner(date) {
   }
   set('k-wx', w);
   if (__NET__) {
-    const t = nowS(); let ant = 0, nw = 0; for (const p of planes.values()) if (p.fresh(t) && !p.remote) { if (p.src === 'ant') ant++; else nw++; }
+    const t = nowS(); let ant = 0, nw = 0; for (const p of planes.values()) if (p.fresh(t) && !p.remote) { if (p.tAnt && t - p.tAnt < 20) ant++; else nw++; }
     const pl = (n) => n + (n === 1 ? ' aircraft' : ' aircraft');
     set('k-src', S.src === 'antenna' ? (dataBase ? pl(ant) + ' heard by your antenna' : '') : !dataBase || S.src === 'network' ? (net.ok ? pl(nw) + ' from the flight network' : '') : net.ok ? ant + ' by your antenna, ' + nw + ' more from the flight network' : pl(ant) + ' heard by your antenna');
   }
@@ -361,6 +361,7 @@ function ingest(list, serverNow, kind = 0) {
     p.tSeen = t;
     if (ac.lat != null && ac.lon != null) {
       const tPos = t - (ac.seen_pos != null ? ac.seen_pos : 0);
+      if (kind === 0) p.tAnt = t;   // the antenna heard this aircraft just now, whichever source ends up drawing it
       if (tPos > p.tPos + 0.05) { p.report(ac, tPos); p.src = kind === 0 ? 'ant' : 'net'; }
     }
   }
@@ -401,7 +402,7 @@ async function netTick(force) {
     const list = (d.ac || d.aircraft || []).filter((a) => a && a.lat != null && a.lon != null && a.alt_baro !== 'ground');
     for (const a of list) a._d = gcDist(la, lo, a.lat, a.lon);
     list.sort((x, y) => x._d - y._d);
-    if (S.src !== 'antenna') ingest(list.slice(0, NET_CAP), 0, 2);
+    if (S.src !== 'antenna') ingest(list.slice(0, clamp(Math.round(S.netmax) || NET_CAP, 10, NET_CAP)), 0, 2);   // the nearest ones, up to the limit chosen in the settings
     net.ok = true; net.fails = 0; net.lastGood = nowS(); net.name = src.name;
   } catch (e) {
     net.fails++; if (nowS() - net.lastGood > 40) net.ok = false;
@@ -661,7 +662,7 @@ function updateCaption(t) {
     if (p.gs > 1) bits.push(`${fmtInt(p.gs * 1.15078)} mph`);
     const h = bits.map((b) => `<b>${b}</b>`).join('');
     if ($('c-data')._h !== h) { $('c-data').innerHTML = h; $('c-data')._h = h; }
-    if (__NET__) { const mark = dataBase && S.src === 'blend' && !p.remote ? (p.src === 'ant' ? 'Heard by your antenna' : 'From the flight network') : ''; const n = $('c-src'); if (n._t !== mark) { n._t = mark; n.textContent = mark; n.hidden = !mark; } }
+    if (__NET__) { const mark = dataBase && S.src === 'blend' && !p.remote ? (p.tAnt && t - p.tAnt < 20 ? 'Heard by your antenna' : 'From the flight network') : ''; const n = $('c-src'); if (n._t !== mark) { n._t = mark; n.textContent = mark; n.hidden = !mark; } }
     let prog = '';
     if (shot.kind === 'follow' && capRoute) {
       const ap = capRoute._airports, a = ap[0], b = ap[ap.length - 1];
@@ -703,7 +704,7 @@ function applyCenter() {
 }
 function initPanel() {
   buildCenterOptions();
-  $('f-other').value = S.other; $('f-radius').value = String(S.radius); $('f-pace').value = String(S.pace); $('f-cap').checked = !!S.captions; $('f-sky').value = S.sky; $('f-wx').value = S.wx; $('f-corner').checked = !!S.corner; $('f-lights').value = S.lights; if (__NET__) { $('f-src').value = S.src; $('f-relay').value = S.relay || ''; $('f-relay').placeholder = relayBase() && !S.relay ? relayBase() : 'http://'; } $('f-trail').value = String(S.trail); $('f-flight').value = S.follow || '';
+  $('f-other').value = S.other; $('f-radius').value = String(S.radius); $('f-pace').value = String(S.pace); $('f-cap').checked = !!S.captions; $('f-sky').value = S.sky; $('f-wx').value = S.wx; $('f-corner').checked = !!S.corner; $('f-lights').value = S.lights; if (__NET__) { $('f-src').value = S.src; $('f-relay').value = S.relay || ''; $('f-netmax').value = String(S.netmax); if ($('f-netmax').value !== String(S.netmax)) { S.netmax = 130; $('f-netmax').value = '130'; } $('f-relay').placeholder = relayBase() && !S.relay ? relayBase() : 'http://'; } $('f-trail').value = String(S.trail); $('f-flight').value = S.follow || '';
   $('f-center').onchange = (e) => { S.center = e.target.value; $('row-other').hidden = S.center !== 'OTHER'; save(); if (S.center !== 'OTHER' || AP[S.other.toUpperCase()] || AP['K' + S.other.toUpperCase()]) applyCenter(); };
   $('f-other').oninput = (e) => { S.other = e.target.value.trim().toUpperCase(); const ok = AP[S.other] || AP['K' + S.other]; $('other-note').textContent = ok ? ok[2] + (ok[3] ? ', ' + ok[3] : '') : (S.other.length >= 3 ? 'No airport found with that code' : ''); if (ok) { save(); applyCenter(); } };
   $('f-radius').onchange = (e) => { S.radius = +e.target.value; save(); ground.setRing(C.lat, C.lon, radiusKm());  };
@@ -714,6 +715,7 @@ function initPanel() {
   $('f-corner').onchange = (e) => { S.corner = e.target.checked; save(); };
   $('f-lights').onchange = (e) => { S.lights = e.target.value; save(); };
   if (__NET__) $('f-relay').onchange = (e) => { S.relay = e.target.value.trim(); save(); net.i = 0; net.fails = 0; net.ok = null; net.lastGood = -1e9; netTick(true); };
+  if (__NET__) $('f-netmax').onchange = (e) => { S.netmax = +e.target.value; save(); netTick(true); };
   if (__NET__) $('f-src').onchange = (e) => { S.src = e.target.value; save(); netTick(true); updateCorner(simClock || new Date()); };
   $('f-trail').onchange = (e) => { S.trail = +e.target.value; save(); };
   $('f-follow').onsubmit = (e) => { e.preventDefault(); setFollow($('f-flight').value); $('f-flight').blur(); };
