@@ -5,6 +5,8 @@ import { VEX, proj, setOrigin, project, localFrame, Segments, Ground, Sky, Weath
 import { AIRLINES, IATA2ICAO, paintFor } from './airlines.js';
 
 const Q = new URLSearchParams(location.search);
+// __NET__ is set when the page is built: true in the network edition, false in the home edition.
+// Because it is fixed at build time, every part of the code that depends on it is left out of the home edition altogether.
 const GEO = JSON.parse(document.getElementById('geo-data').textContent);
 const AIRPORTS = JSON.parse(document.getElementById('airport-data').textContent);
 const AP = {}; for (const a of AIRPORTS) { AP[a[0]] = a; if (a[1]) AP[a[1]] = a; }
@@ -15,7 +17,9 @@ const PRESETS = [
   ['MID', 'Midway between LaGuardia and Kennedy'], ['KJFK', 'Kennedy'], ['KLGA', 'LaGuardia'], ['KEWR', 'Newark'], ['KHPN', 'White Plains'],
   ['KBDR', 'Bridgeport'], ['KHVN', 'New Haven'], ['KISP', 'Islip'], ['KTEB', 'Teterboro'], ['KSWF', 'Stewart'], ['KBDL', 'Hartford Bradley'],
 ];
-const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr' };
+if (__NET__) PRESETS.push(['KBOS', 'Boston'], ['KPHL', 'Philadelphia'], ['KDCA', 'Washington National'], ['KATL', 'Atlanta'], ['KMIA', 'Miami'], ['KORD', 'Chicago O\'Hare'], ['KDFW', 'Dallas Fort Worth'],
+  ['KDEN', 'Denver'], ['KLAX', 'Los Angeles'], ['KSFO', 'San Francisco'], ['KSEA', 'Seattle']);
+const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr', src: 'blend' };
 const S = Object.assign({}, DEFAULTS);
 try { Object.assign(S, JSON.parse(localStorage.getItem('sky3d') || '{}')); } catch (e) { /* storage unavailable */ }
 for (const k of Object.keys(DEFAULTS)) if (Q.has(k)) { const v = Q.get(k); S[k] = typeof DEFAULTS[k] === 'number' ? +v : typeof DEFAULTS[k] === 'boolean' ? v !== '0' && v !== 'false' : v; }
@@ -221,6 +225,11 @@ function updateCorner(date) {
     if (wxInfo.gust > wxInfo.wind + 9) w += ', gusts to ' + Math.round(wxInfo.gust);
   }
   set('k-wx', w);
+  if (__NET__) {
+    const t = nowS(); let ant = 0, nw = 0; for (const p of planes.values()) if (p.fresh(t) && !p.remote) { if (p.src === 'ant') ant++; else nw++; }
+    const pl = (n) => n + (n === 1 ? ' aircraft' : ' aircraft');
+    set('k-src', S.src === 'antenna' ? (dataBase ? pl(ant) + ' heard by your antenna' : '') : !dataBase || S.src === 'network' ? (net.ok ? pl(nw) + ' from the flight network' : '') : net.ok ? ant + ' by your antenna, ' + nw + ' more from the flight network' : pl(ant) + ' heard by your antenna');
+  }
 }
 
 // ---------- aircraft ----------
@@ -274,7 +283,7 @@ class Plane {
     }
     return out;
   }
-  fresh(t) { return this.lat !== null && t - this.tPos < (this.remote ? 45 : 20); }
+  fresh(t) { return this.lat !== null && t - this.tPos < (this.remote ? 45 : this.src === 'net' ? 30 : 20); }
 }
 
 const ARR3 = [0, 0, 0], P_F = new THREE.Vector3(), P_C = new THREE.Vector3();
@@ -329,26 +338,63 @@ function updatePlane(p, t, dt, night) {
 }
 function removePlane(p) { if (p.mesh) { planeLayer.remove(p.mesh.group); p.mesh.dispose(); } planes.delete(p.hex); }
 
-function ingest(list, serverNow, remote) {
-  const t = nowS();
-  if (!remote) { const off = serverNow - t; clockOffset = clockOffset === null ? off : (Math.abs(off - clockOffset) > 5 ? off : lerp(clockOffset, off, 0.05)); }
+// kind 0: this receiver's own antenna. kind 1: one followed flight looked up on the internet. kind 2: the flight network's list for an area.
+function ingest(list, serverNow, kind = 0) {
+  const t = nowS(), remote = kind === 1, area = kind === 2;
+  if (kind === 0) { const off = serverNow - t; clockOffset = clockOffset === null ? off : (Math.abs(off - clockOffset) > 5 ? off : lerp(clockOffset, off, 0.05)); }
+  if (__NET__ && kind === 0 && S.src === 'network') return;
   for (const ac of list) {
     if (!ac.hex || ac.hex[0] === '~') continue;
     let p = planes.get(ac.hex);
     if (!p) {
       if (ac.lat == null) continue;
-      p = new Plane(ac.hex); planes.set(ac.hex, p);
+      p = new Plane(ac.hex); planes.set(ac.hex, p); p.src = kind === 0 ? 'ant' : 'net';
       const h = pendingHistory.get(ac.hex); if (h) { p.trail = h; pendingHistory.delete(ac.hex); }
     }
-    if (remote && !p.remote && p.fresh(t)) continue;       // the antenna's own data wins while it has the aircraft
-    p.remote = !!remote; p.tSeen = t;
+    // names and types are welcome from anywhere, even for an aircraft the antenna is tracking
     if (ac.flight) p.flight = ac.flight; if (ac.category) p.category = ac.category;
     if (ac.t) p.type = ac.t; if (ac.r) p.reg = ac.r; if (ac.desc) p.desc = ac.desc;
+    if (remote && !p.remote && p.fresh(t)) continue;         // the antenna's own data wins while it has the aircraft
+    if (area && p.src === 'ant' && t - p.tPos < 6) continue;   // the same rule for the flight network: it only fills in what the antenna is not hearing
+    if (area && p.remote && p.fresh(t)) p.remote = false;
+    if (!area) p.remote = remote;
+    p.tSeen = t;
     if (ac.lat != null && ac.lon != null) {
       const tPos = t - (ac.seen_pos != null ? ac.seen_pos : 0);
-      if (tPos > p.tPos + 0.05) p.report(ac, tPos);
+      if (tPos > p.tPos + 0.05) { p.report(ac, tPos); p.src = kind === 0 ? 'ant' : 'net'; }
     }
   }
+}
+
+// ---------- the flight network (network edition only) ----------
+// A free community network of receivers. It is asked only for the aircraft around the place on screen, every few seconds.
+// Nothing from this receiver's antenna is sent to it.
+const NET_CAP = 130;
+const NET_SOURCES = !__NET__ ? null : [
+  { name: 'ADSB.lol', every: 5, url: (la, lo, r) => (Q.get('netApi') || 'https://api.adsb.lol/v2/') + 'point/' + la + '/' + lo + '/' + r },
+  { name: 'airplanes.live', every: 10, url: (la, lo, r) => 'https://api.airplanes.live/v2/point/' + la + '/' + lo + '/' + r },
+  { name: 'adsb.fi', every: 10, url: (la, lo, r) => 'https://opendata.adsb.fi/api/v2/lat/' + la + '/lon/' + lo + '/dist/' + r },
+];
+const net = { i: 0, ok: null, last: -1e9, lastGood: -1e9, fails: 0, busy: false, name: '' };
+function netRadiusNm() { const mi = S.radius > 0 ? Math.max(S.radius * 1.5, 40) : 140; return Math.round(clamp(mi * 0.869, 35, 130)); }
+async function netTick(force) {
+  if (!__NET__ || S.src === 'antenna' || net.busy || (!MANUAL && document.hidden)) return;
+  const t = nowS(), src = NET_SOURCES[net.i]; if (!force && t - net.last < src.every) return;
+  net.busy = true; net.last = t;
+  // ask around the centre of the sky, or around a followed flight once it has left that area
+  const far = follow.state === 'on' && gcDist(C.lat, C.lon, pose.lat, pose.lon) > 60, la = far ? pose.lat : C.lat, lo = far ? pose.lon : C.lon;
+  try {
+    const d = await getJSON(src.url(la.toFixed(3), lo.toFixed(3), netRadiusNm()) + (MANUAL && fakeT ? '?t=' + fakeT : ''));
+    const list = (d.ac || d.aircraft || []).filter((a) => a && a.lat != null && a.lon != null && a.alt_baro !== 'ground');
+    for (const a of list) a._d = gcDist(la, lo, a.lat, a.lon);
+    list.sort((x, y) => x._d - y._d);
+    if (S.src !== 'antenna') ingest(list.slice(0, NET_CAP), 0, 2);
+    net.ok = true; net.fails = 0; net.lastGood = nowS(); net.name = src.name;
+  } catch (e) {
+    net.fails++; if (nowS() - net.lastGood > 40) net.ok = false;
+    if (net.fails >= 2 && !Q.has('netApi')) { net.i = (net.i + 1) % NET_SOURCES.length; net.fails = 0; }   // try the next network
+  }
+  net.busy = false;
 }
 
 // ---------- receiver data ----------
@@ -468,7 +514,7 @@ async function followTick() {
       const d = await getJSON(POS_API + 'callsign/' + encodeURIComponent(follow.want) + (MANUAL && fakeT ? '?t=' + fakeT : '')); follow.netOk = true;
       let ac = (d.ac || []).filter((a) => a.lat != null);
       if (!ac.length && /^[A-Z]-?[A-Z0-9]{3,5}$|^N\d/.test(follow.want)) { const d2 = await getJSON(POS_API + 'reg/' + encodeURIComponent(follow.want)); ac = (d2.ac || []).filter((a) => a.lat != null); }
-      if (ac.length) ingest([ac[0]], 0, true);
+      if (ac.length) ingest([ac[0]], 0, 1);
     } catch (e) { follow.netOk = false; }
   }
   if (follow.state === 'on' && !p) {
@@ -601,6 +647,7 @@ function updateCaption(t) {
     if (p.gs > 1) bits.push(`${fmtInt(p.gs * 1.15078)} mph`);
     const h = bits.map((b) => `<b>${b}</b>`).join('');
     if ($('c-data')._h !== h) { $('c-data').innerHTML = h; $('c-data')._h = h; }
+    if (__NET__) { const mark = dataBase && S.src === 'blend' && !p.remote ? (p.src === 'ant' ? 'Heard by your antenna' : 'From the flight network') : ''; const n = $('c-src'); if (n._t !== mark) { n._t = mark; n.textContent = mark; n.hidden = !mark; } }
     let prog = '';
     if (shot.kind === 'follow' && capRoute) {
       const ap = capRoute._airports, a = ap[0], b = ap[ap.length - 1];
@@ -615,8 +662,10 @@ function updateCaption(t) {
   if (show !== capShown) { capShown = show; $('cap').classList.toggle('on', show); }
   // quiet status line
   let msg = '';
-  if (!dataBase) msg = pollFails >= 2 ? 'No receiver found. Open this page from the address of the Raspberry Pi, not from the downloaded file.' : '';
-  else if (t - lastGood > 15) msg = 'The receiver has stopped answering. Trying again.';
+  const netOn = __NET__ && S.src !== 'antenna';
+  if (__NET__ && !dataBase && netOn) msg = net.ok === false ? 'The flight network is not answering. Trying again.' : '';
+  else if (!dataBase) msg = pollFails >= 2 ? (__NET__ ? 'No receiver found here. To watch without one, open the settings and choose the flight network under "Aircraft from".' : 'No receiver found. Open this page from the address of the Raspberry Pi, not from the downloaded file.') : '';
+  else if (t - lastGood > 15 && !(netOn && net.ok)) msg = 'The receiver has stopped answering. Trying again.';
   else if (follow.want && follow.state === 'looking' && t - follow.since > 4) msg = follow.netOk ? `Looking for ${follow.want}. It is not in the air within reach yet.` : `Looking for ${follow.want} with your antenna only. The internet lookup did not answer.`;
   else if (shot.kind === 'wide' && t - shot.t0 > shot.dur + shot.hold + 3 && !paused && !candidates().length) msg = planes.size ? `No aircraft within ${S.radius} miles of ${C.short} right now.` : 'No aircraft heard right now.';
   else if (paused && shot.kind === 'visit') msg = 'Holding on this aircraft. Press the space bar to move on.';
@@ -634,12 +683,13 @@ function buildCenterOptions() {
   $('row-other').hidden = S.center !== 'OTHER';
 }
 function applyCenter() {
+  if (__NET__) setTimeout(() => netTick(true), 50);
   C = centerPoint(); reorigin(C.lat, C.lon); for (const p of planes.values()) for (const s of p.trail) s.ep = -1;
   if (shot.kind !== 'follow') { begin('wide', 7); shot.hold = 5; hideCaption(); }
 }
 function initPanel() {
   buildCenterOptions();
-  $('f-other').value = S.other; $('f-radius').value = String(S.radius); $('f-pace').value = String(S.pace); $('f-cap').checked = !!S.captions; $('f-sky').value = S.sky; $('f-wx').value = S.wx; $('f-corner').checked = !!S.corner; $('f-lights').value = S.lights; $('f-trail').value = String(S.trail); $('f-flight').value = S.follow || '';
+  $('f-other').value = S.other; $('f-radius').value = String(S.radius); $('f-pace').value = String(S.pace); $('f-cap').checked = !!S.captions; $('f-sky').value = S.sky; $('f-wx').value = S.wx; $('f-corner').checked = !!S.corner; $('f-lights').value = S.lights; if (__NET__) $('f-src').value = S.src; $('f-trail').value = String(S.trail); $('f-flight').value = S.follow || '';
   $('f-center').onchange = (e) => { S.center = e.target.value; $('row-other').hidden = S.center !== 'OTHER'; save(); if (S.center !== 'OTHER' || AP[S.other.toUpperCase()] || AP['K' + S.other.toUpperCase()]) applyCenter(); };
   $('f-other').oninput = (e) => { S.other = e.target.value.trim().toUpperCase(); const ok = AP[S.other] || AP['K' + S.other]; $('other-note').textContent = ok ? ok[2] + (ok[3] ? ', ' + ok[3] : '') : (S.other.length >= 3 ? 'No airport found with that code' : ''); if (ok) { save(); applyCenter(); } };
   $('f-radius').onchange = (e) => { S.radius = +e.target.value; save(); ground.setRing(C.lat, C.lon, radiusKm());  };
@@ -649,6 +699,7 @@ function initPanel() {
   $('f-wx').onchange = (e) => { S.wx = e.target.value; save(); if (S.wx === 'real') setWeather({}); applyWeather(); updateCorner(simClock || new Date()); };
   $('f-corner').onchange = (e) => { S.corner = e.target.checked; save(); };
   $('f-lights').onchange = (e) => { S.lights = e.target.value; save(); };
+  if (__NET__) $('f-src').onchange = (e) => { S.src = e.target.value; save(); netTick(true); updateCorner(simClock || new Date()); };
   $('f-trail').onchange = (e) => { S.trail = +e.target.value; save(); };
   $('f-follow').onsubmit = (e) => { e.preventDefault(); setFollow($('f-flight').value); $('f-flight').blur(); };
   $('f-stop').onclick = () => setFollow('');
@@ -716,10 +767,11 @@ function frame() {
 // ---------- start ----------
 resize(); reorigin(C.lat, C.lon); applyWeather(); updateLook(C.lat, C.lon, simClock || new Date()); initPanel();
 if (S.follow) setFollow(S.follow);
-if (!MANUAL) { poll(); setInterval(followTick, 1000); }
+if (!MANUAL) { poll(); setInterval(followTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
 window.__sky = { wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
-  feed: async (T) => { fakeT = T; const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } };
+  feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
+  net, NET: __NET__ };
 if (!MANUAL) requestAnimationFrame(frame);

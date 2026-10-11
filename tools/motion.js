@@ -5,7 +5,7 @@ const { chromium } = require('playwright');
   const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   page.on('pageerror', (e) => console.log('PAGEERROR: ' + e.message));
-  await page.goto('http://localhost:8090/sky/?clock=manual&routeApi=/mock/routeset&posApi=/mock/v2/&dpr=1&' + query);
+  await page.goto('http://localhost:8090' + (process.env.SKY_PATH || '/sky/') + '?clock=manual&routeApi=/mock/routeset&posApi=/mock/v2/&dpr=1&' + query);
   const r = await page.evaluate(async ({ secs, js }) => {
     const s = window.__sky, T0 = Date.now() / 1000; let vt = 0; if (js) eval(js);
     const cam = [], kinds = [], jl = {}, spikes = []; let prevPos = new Map(), planeJumps = 0, worstPlane = 0, centerDev = 0, steps = 0, prevC = null, prevV = null, worstAcc = 0, worstAccAt = 0, maxSpeed = 0, maxSpeedAt = 0;

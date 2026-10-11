@@ -558,6 +558,7 @@ export class PlaneMesh {
       for (const o of L.lamps) { o.material.opacity = on * (0.45 + 0.55 * glare); o.scale.setScalar((0.16 + 0.5 * front * front * front) * (1 + far * 2.2)); o.visible = on > 0.01; }
       L.beamMat.uniforms.opacity.value = on * 0.2 * (1 - 0.5 * front); L.beam.visible = on > 0.01;
     }
+    for (const o of this.sprites) o.visible = o.material.opacity > 0.012;   // a light that is dark this instant is not drawn at all, which matters with many aircraft
     this.mesh.visible = opacity > 0.01; this.group.visible = opacity > 0.01;
   }
   dispose() {

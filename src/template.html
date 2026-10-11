@@ -1,10 +1,10 @@
 <!doctype html>
 <!--
-  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 2.1.
+  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3, /*EDITION*/.
   One self-contained page. Put it on the receiver's web server and open it in a browser.
   Includes three.js (c) 2010-2024 three.js authors, MIT License.
   Shorelines: GSHHG (Wessel and Smith, LGPL) and Natural Earth (public domain). State lines: United States Census Bureau.
-  Airports and runways: OurAirports (public domain). Weather: Open-Meteo.com (CC BY 4.0).
+  Airports and runways: OurAirports (public domain). Weather: Open-Meteo.com (CC BY 4.0).<!--NET--> Flight network: ADSB.lol (ODbL).<!--/NET-->
 -->
 <html lang="en">
 <head>
@@ -34,6 +34,7 @@ body { cursor: none; } body.awake { cursor: default; }
 #c-prog { margin-top: 2vh; width: min(46vw, 620px); height: 2px; background: var(--line); border-radius: 2px; }
 #c-bar { height: 2px; width: 0; background: var(--lamp); border-radius: 2px; transition: width 2s linear; box-shadow: 0 0 10px rgba(255,208,138,0.7); }
 #c-progtext { font-size: 1.85vh; color: var(--soft); margin-top: 1.1vh; }
+#c-src { font-size: 1.75vh; color: var(--soft); margin-top: 1.3vh; letter-spacing: 0.03em; }
 #msg { position: fixed; left: 5.2vw; top: 6vh; max-width: 60vw; font-size: 2.2vh; color: var(--soft); opacity: 0; transition: opacity 1.4s ease; pointer-events: none; text-shadow: 0 1px 12px rgba(0,0,0,0.6); z-index: 2; }
 #msg.on { opacity: 1; }
 #corner { position: fixed; right: 3vw; top: 5vh; text-align: right; font-size: 1.9vh; line-height: 1.5; color: var(--ink); opacity: 0; transition: opacity 1.6s ease; pointer-events: none; z-index: 2;
@@ -76,15 +77,22 @@ body.panel #panel { transform: none; }
   <div id="c-data"></div>
   <div id="c-prog" hidden><div id="c-bar"></div></div>
   <div id="c-progtext" hidden></div>
+<!--NET-->  <div id="c-src" hidden></div><!--/NET-->
 </div>
 <div id="shade"></div>
 <div id="msg" role="status"></div>
-<div id="corner"><div id="k-top"><span id="k-time"></span><span id="k-phase"></span></div><div id="k-sun"></div><div id="k-wx"></div></div>
+<div id="corner"><div id="k-top"><span id="k-time"></span><span id="k-phase"></span></div><div id="k-sun"></div><div id="k-wx"></div><!--NET--><div id="k-src"></div><!--/NET--></div>
 <button id="gear" type="button">Settings</button>
 <aside id="panel" aria-label="Settings">
   <button id="close" class="quiet" type="button">Close</button>
   <h1>3D sky</h1>
-  <p class="lead">Live aircraft heard by this receiver. Changes take effect straight away and are remembered on this screen.</p>
+  <!--HOME--><p class="lead">Live aircraft heard by this receiver. Changes take effect straight away and are remembered on this screen.</p><!--/HOME-->
+<!--NET-->  <p class="lead">Live aircraft from this receiver's antenna, joined by a public flight network. Changes take effect straight away and are remembered on this screen.</p>
+
+  <label for="f-src">Aircraft from</label>
+  <select id="f-src"><option value="blend">My antenna and the flight network</option><option value="antenna">My antenna only</option><option value="network">The flight network only</option></select>
+  <div class="note">Your antenna comes first. The flight network fills in what it cannot hear, and is all there is when no receiver is in reach. Flight network data by <b>ADSB.lol</b>.</div>
+<!--/NET-->
 
   <label for="f-center">Center the sky on</label>
   <select id="f-center"></select>
@@ -135,7 +143,7 @@ body.panel #panel { transform: none; }
     <dt>F</dt><dd>Fill the screen</dd>
     <dt>S</dt><dd>Open or close these settings</dd>
   </dl>
-  <p class="note" style="margin-top:22px">Version 2.1, October 10, 2026</p>
+  <p class="note" style="margin-top:22px">Version 3, /*EDITION*/, October 11, 2026</p>
 </aside>
 <script type="application/json" id="geo-data">/*GEO*/</script>
 <script type="application/json" id="airport-data">/*AIRPORTS*/</script>

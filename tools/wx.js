@@ -5,7 +5,7 @@ const { chromium } = require('playwright');
   for (const wx of ['clear', 'cloud', 'overcast', 'rain', 'storm', 'snow', 'wind', 'fog']) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } }); const errs = [];
     page.on('pageerror', (e) => errs.push('PAGEERROR: ' + e.message));
-    await page.goto('http://localhost:8090/sky/?clock=manual&dpr=1&sky=day&wx=' + wx);
+    await page.goto('http://localhost:8090' + (process.env.SKY_PATH || '/sky/') + '?clock=manual&dpr=1&sky=day&wx=' + wx);
     const r = await page.evaluate(() => {
       const s = window.__sky; let flash = 0, flashes = 0, was = 0;
       for (let i = 0; i < 60 * 60; i++) { s.step(1 / 60, false); const f = s.sky.uniforms.flash.value; if (f > flash) flash = f; if (f > 0.2 && was <= 0.2) flashes++; was = f; }

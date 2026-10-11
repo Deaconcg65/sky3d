@@ -1,7 +1,8 @@
-node_modules/
+*.log
 build/app.js
 build/shots/
-*.log
-node_modules
-dl/
+build/sky3d-network.html
 build/sky3d.html
+dl/
+node_modules
+node_modules/

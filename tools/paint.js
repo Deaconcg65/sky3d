@@ -6,7 +6,7 @@ const { chromium } = require('playwright');
   const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
   const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
   page.on('pageerror', (e) => console.log('PAGEERROR: ' + e.message)); page.on('console', (m) => { if (m.type() === 'error') console.log('console: ' + m.text()); });
-  await page.goto('http://localhost:8090/sky/?clock=manual&dpr=1&wx=clear&corner=0&sky=' + sky);
+  await page.goto('http://localhost:8090' + (process.env.SKY_PATH || '/sky/') + '?clock=manual&dpr=1&wx=clear&corner=0&sky=' + sky);
   await page.evaluate(({ list, view, lit }) => {
     window.__lit = lit; const s = window.__sky; s.step(0.5, false);
     const names = list.split(','), cols = Math.min(4, Math.ceil(Math.sqrt(names.length))), rows = Math.ceil(names.length / cols);

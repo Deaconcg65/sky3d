@@ -5,7 +5,7 @@ const { chromium } = require('playwright');
   const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl'] });
   const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
   const logs = []; page.on('console', (m) => logs.push(m.type() + ': ' + m.text())); page.on('pageerror', (e) => logs.push('PAGEERROR: ' + e.message));
-  await page.goto('http://localhost:8090/sky/?routeApi=/mock/routeset&posApi=/mock/v2/&dpr=1&' + query);
+  await page.goto('http://localhost:8090' + (process.env.SKY_PATH || '/sky/') + '?routeApi=/mock/routeset&posApi=/mock/v2/&dpr=1&' + query);
   if (js) await page.evaluate(js);
   let prev = 0;
   for (const s of times.split(',').map(Number)) { await page.waitForTimeout((s - prev) * 1000); prev = s; await page.screenshot({ path: `${out}_${s}.png` }); }

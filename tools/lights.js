@@ -6,7 +6,7 @@ const { chromium } = require('playwright');
   const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
   const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
   page.on('pageerror', (e) => console.log('PAGEERROR: ' + e.message));
-  await page.goto('http://localhost:8090/sky/?clock=manual&routeApi=/mock/routeset&posApi=/mock/v2/&dpr=1&wx=clear&pace=60&center=KJFK&radius=15&sky=' + sky + '&lights=' + lights);
+  await page.goto('http://localhost:8090' + (process.env.SKY_PATH || '/sky/') + '?clock=manual&routeApi=/mock/routeset&posApi=/mock/v2/&dpr=1&wx=clear&pace=60&center=KJFK&radius=15&sky=' + sky + '&lights=' + lights);
   await page.evaluate(`window.__vt = 0; window.__T0 = Date.now() / 1000 - 30; window.__adv = async (to) => { const s = window.__sky; while (window.__vt < to) { if (Math.round(window.__vt * 60) % 60 === 0) await s.feed((window.__T0 + window.__vt).toFixed(3)); s.step(1 / 60, false); window.__vt += 1 / 60; } s.step(0.0001, true); };`);
   await page.evaluate('window.__adv(7)'); await page.waitForTimeout(1500); await page.evaluate('window.__sky.step(0.0001, true)'); await page.screenshot({ path: out + '_wide.png' });
   const info = await page.evaluate(() => {

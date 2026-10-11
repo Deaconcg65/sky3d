@@ -90,11 +90,15 @@ function dbFile(name) {
   if (!fs.existsSync(fp)) { try { execFileSync('curl', ['-sS', '-f', '-m', '30', '-o', fp, 'https://raw.githubusercontent.com/wiedehopf/tar1090-db/master/db/' + path.basename(name)]); } catch (e) { return null; } }
   return fs.existsSync(fp) ? fs.readFileSync(fp) : null;
 }
-let stall = false;
+let stall = false, stallNet = false;
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x'), T = u.searchParams.has('t') ? +u.searchParams.get('t') : Date.now() / 1000;
   const json = (o, extra) => { res.writeHead(200, Object.assign({ 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' }, extra || {})); res.end(typeof o === 'string' || Buffer.isBuffer(o) ? o : JSON.stringify(o)); };
   if (u.pathname === '/sky/' || u.pathname === '/sky/index.html') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(fs.readFileSync(path.join(root, 'build/sky3d.html'))); }
+  if (u.pathname === '/net/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(fs.readFileSync(path.join(root, 'build/sky3d-network.html'))); }
+  // stand-in for the flight network: every aircraft in the area, including the low ones the pretend antenna cannot hear
+  if (u.pathname.startsWith('/mock/v2/point/')) { if (stallNet) { res.writeHead(503); return res.end(); } const all = snapshot(T, { all: true }).map(strip).map((a) => Object.assign({ t: 'B738', desc: 'BOEING 737-800' }, a)); return json({ ac: all, msg: 'No error', now: Math.round(T * 1000), total: all.length }, { 'Access-Control-Allow-Origin': '*' }); }
+  if (u.pathname === '/ctl/stallnet') { stallNet = u.searchParams.get('on') === '1'; return json({ stallNet }); }
   if (u.pathname === '/ctl/stall') { stall = u.searchParams.get('on') === '1'; return json({ stall }); }
   if (u.pathname === '/tar1090/data/aircraft.json') { if (stall) { res.writeHead(503); return res.end(); } return json({ now: +T.toFixed(1), messages: 1234567, aircraft: snapshot(T).map(strip) }); }
   if (u.pathname === '/tar1090/data/receiver.json') return json({ version: 'sim', refresh: 1000, history: 0 });

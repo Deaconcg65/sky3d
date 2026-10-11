@@ -13,3 +13,5 @@ The built page `sky3d.html` and the files in `build/` also contain work by other
 At run time the page reads aircraft types, airline names and trail history from the tar1090 map page on the receiver, if it is there, and asks the adsb.im and api.adsb.lol services for routes and for the position of a followed flight.
 
 Weather data by [Open-Meteo.com](https://open-meteo.com/), Creative Commons Attribution 4.0. The page asks api.open-meteo.com for the current weather at the place on screen. Open-Meteo's free service is for non-commercial use.
+
+Network edition only: aircraft positions beyond the receiver's own antenna come from [ADSB.lol](https://adsb.lol/), Open Database License, with airplanes.live and adsb.fi as fallbacks. These are free community services for personal, non-commercial use, and their terms and limits can change.
