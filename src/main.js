@@ -19,7 +19,7 @@ const PRESETS = [
 ];
 if (__NET__) PRESETS.push(['KBOS', 'Boston'], ['KPHL', 'Philadelphia'], ['KDCA', 'Washington National'], ['KATL', 'Atlanta'], ['KMIA', 'Miami'], ['KORD', 'Chicago O\'Hare'], ['KDFW', 'Dallas Fort Worth'],
   ['KDEN', 'Denver'], ['KLAX', 'Los Angeles'], ['KSFO', 'San Francisco'], ['KSEA', 'Seattle']);
-const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr', src: 'blend' };
+const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr', src: 'blend', relay: '' };
 const S = Object.assign({}, DEFAULTS);
 try { Object.assign(S, JSON.parse(localStorage.getItem('sky3d') || '{}')); } catch (e) { /* storage unavailable */ }
 for (const k of Object.keys(DEFAULTS)) if (Q.has(k)) { const v = Q.get(k); S[k] = typeof DEFAULTS[k] === 'number' ? +v : typeof DEFAULTS[k] === 'boolean' ? v !== '0' && v !== 'false' : v; }
@@ -370,16 +370,25 @@ function ingest(list, serverNow, kind = 0) {
 // A free community network of receivers. It is asked only for the aircraft around the place on screen, every few seconds.
 // Nothing from this receiver's antenna is sent to it.
 const NET_CAP = 130;
-const NET_SOURCES = !__NET__ ? null : [
-  { name: 'ADSB.lol', every: 5, url: (la, lo, r) => (Q.get('netApi') || 'https://api.adsb.lol/v2/') + 'point/' + la + '/' + lo + '/' + r },
-  { name: 'airplanes.live', every: 10, url: (la, lo, r) => 'https://api.airplanes.live/v2/point/' + la + '/' + lo + '/' + r },
-  { name: 'adsb.fi', every: 10, url: (la, lo, r) => 'https://opendata.adsb.fi/api/v2/lat/' + la + '/lon/' + lo + '/dist/' + r },
-];
+// Web browsers are not allowed to read these flight networks directly, because the networks do not give pages that permission.
+// So the page goes through a relay: a few lines of code on a free hosting service that fetch the list and hand it on (see relay/worker.js).
+// DEFAULT_RELAY is the relay this copy uses unless another address is typed into the settings.
+const DEFAULT_RELAY = '';
+const relayBase = () => { const r = (Q.get('relay') || S.relay || DEFAULT_RELAY || '').trim().replace(/\/+$/, ''); return /^(https?:\/\/|\/)/.test(r) ? r : ''; };
+const point = (base) => (la, lo, r) => base + 'point/' + la + '/' + lo + '/' + r;
+function netSources() {
+  const direct = [
+    { name: 'ADSB.lol', every: 5, url: point(Q.get('netApi') || 'https://api.adsb.lol/v2/') },
+    { name: 'airplanes.live', every: 10, url: point('https://api.airplanes.live/v2/') },
+    { name: 'adsb.fi', every: 10, url: (la, lo, r) => 'https://opendata.adsb.fi/api/v2/lat/' + la + '/lon/' + lo + '/dist/' + r },
+  ];
+  const rb = relayBase(); return rb ? [{ name: 'the relay', every: 5, url: point(rb + '/v2/') }].concat(direct) : direct;
+}
 const net = { i: 0, ok: null, last: -1e9, lastGood: -1e9, fails: 0, busy: false, name: '' };
 function netRadiusNm() { const mi = S.radius > 0 ? Math.max(S.radius * 1.5, 40) : 140; return Math.round(clamp(mi * 0.869, 35, 130)); }
 async function netTick(force) {
   if (!__NET__ || S.src === 'antenna' || net.busy || (!MANUAL && document.hidden)) return;
-  const t = nowS(), src = NET_SOURCES[net.i]; if (!force && t - net.last < src.every) return;
+  const list0 = netSources(), t = nowS(), src = list0[net.i % list0.length]; if (!force && t - net.last < src.every) return;
   net.busy = true; net.last = t;
   // ask around the centre of the sky, or around a followed flight once it has left that area
   const far = follow.state === 'on' && gcDist(C.lat, C.lon, pose.lat, pose.lon) > 60, la = far ? pose.lat : C.lat, lo = far ? pose.lon : C.lon;
@@ -392,7 +401,7 @@ async function netTick(force) {
     net.ok = true; net.fails = 0; net.lastGood = nowS(); net.name = src.name;
   } catch (e) {
     net.fails++; if (nowS() - net.lastGood > 40) net.ok = false;
-    if (net.fails >= 2 && !Q.has('netApi')) { net.i = (net.i + 1) % NET_SOURCES.length; net.fails = 0; }   // try the next network
+    if (net.fails >= 2 && !Q.has('netApi')) { net.i = (net.i + 1) % list0.length; net.fails = 0; }   // try the next one
   }
   net.busy = false;
 }
@@ -511,9 +520,10 @@ async function followTick() {
   if (needNet && t - follow.lastRemote > (p ? 5 : 12)) {
     follow.lastRemote = t;
     try {
-      const d = await getJSON(POS_API + 'callsign/' + encodeURIComponent(follow.want) + (MANUAL && fakeT ? '?t=' + fakeT : '')); follow.netOk = true;
+      const posApi = __NET__ && relayBase() && !Q.has('posApi') ? relayBase() + '/v2/' : POS_API;
+      const d = await getJSON(posApi + 'callsign/' + encodeURIComponent(follow.want) + (MANUAL && fakeT ? '?t=' + fakeT : '')); follow.netOk = true;
       let ac = (d.ac || []).filter((a) => a.lat != null);
-      if (!ac.length && /^[A-Z]-?[A-Z0-9]{3,5}$|^N\d/.test(follow.want)) { const d2 = await getJSON(POS_API + 'reg/' + encodeURIComponent(follow.want)); ac = (d2.ac || []).filter((a) => a.lat != null); }
+      if (!ac.length && /^[A-Z]-?[A-Z0-9]{3,5}$|^N\d/.test(follow.want)) { const d2 = await getJSON(posApi + 'reg/' + encodeURIComponent(follow.want)); ac = (d2.ac || []).filter((a) => a.lat != null); }
       if (ac.length) ingest([ac[0]], 0, 1);
     } catch (e) { follow.netOk = false; }
   }
@@ -663,7 +673,7 @@ function updateCaption(t) {
   // quiet status line
   let msg = '';
   const netOn = __NET__ && S.src !== 'antenna';
-  if (__NET__ && !dataBase && netOn) msg = net.ok === false ? 'The flight network is not answering. Trying again.' : '';
+  if (__NET__ && !dataBase && netOn) msg = net.ok === false ? (relayBase() || Q.has('netApi') ? 'The flight network is not answering. Trying again.' : 'The flight network cannot be read directly by a web browser. Open the settings and enter a relay address.') : '';
   else if (!dataBase) msg = pollFails >= 2 ? (__NET__ ? 'No receiver found here. To watch without one, open the settings and choose the flight network under "Aircraft from".' : 'No receiver found. Open this page from the address of the Raspberry Pi, not from the downloaded file.') : '';
   else if (t - lastGood > 15 && !(netOn && net.ok)) msg = 'The receiver has stopped answering. Trying again.';
   else if (follow.want && follow.state === 'looking' && t - follow.since > 4) msg = follow.netOk ? `Looking for ${follow.want}. It is not in the air within reach yet.` : `Looking for ${follow.want} with your antenna only. The internet lookup did not answer.`;
@@ -689,7 +699,7 @@ function applyCenter() {
 }
 function initPanel() {
   buildCenterOptions();
-  $('f-other').value = S.other; $('f-radius').value = String(S.radius); $('f-pace').value = String(S.pace); $('f-cap').checked = !!S.captions; $('f-sky').value = S.sky; $('f-wx').value = S.wx; $('f-corner').checked = !!S.corner; $('f-lights').value = S.lights; if (__NET__) $('f-src').value = S.src; $('f-trail').value = String(S.trail); $('f-flight').value = S.follow || '';
+  $('f-other').value = S.other; $('f-radius').value = String(S.radius); $('f-pace').value = String(S.pace); $('f-cap').checked = !!S.captions; $('f-sky').value = S.sky; $('f-wx').value = S.wx; $('f-corner').checked = !!S.corner; $('f-lights').value = S.lights; if (__NET__) { $('f-src').value = S.src; $('f-relay').value = S.relay || ''; $('f-relay').placeholder = DEFAULT_RELAY || 'https://'; } $('f-trail').value = String(S.trail); $('f-flight').value = S.follow || '';
   $('f-center').onchange = (e) => { S.center = e.target.value; $('row-other').hidden = S.center !== 'OTHER'; save(); if (S.center !== 'OTHER' || AP[S.other.toUpperCase()] || AP['K' + S.other.toUpperCase()]) applyCenter(); };
   $('f-other').oninput = (e) => { S.other = e.target.value.trim().toUpperCase(); const ok = AP[S.other] || AP['K' + S.other]; $('other-note').textContent = ok ? ok[2] + (ok[3] ? ', ' + ok[3] : '') : (S.other.length >= 3 ? 'No airport found with that code' : ''); if (ok) { save(); applyCenter(); } };
   $('f-radius').onchange = (e) => { S.radius = +e.target.value; save(); ground.setRing(C.lat, C.lon, radiusKm());  };
@@ -699,6 +709,7 @@ function initPanel() {
   $('f-wx').onchange = (e) => { S.wx = e.target.value; save(); if (S.wx === 'real') setWeather({}); applyWeather(); updateCorner(simClock || new Date()); };
   $('f-corner').onchange = (e) => { S.corner = e.target.checked; save(); };
   $('f-lights').onchange = (e) => { S.lights = e.target.value; save(); };
+  if (__NET__) $('f-relay').onchange = (e) => { S.relay = e.target.value.trim(); save(); net.i = 0; net.fails = 0; net.ok = null; net.lastGood = -1e9; netTick(true); };
   if (__NET__) $('f-src').onchange = (e) => { S.src = e.target.value; save(); netTick(true); updateCorner(simClock || new Date()); };
   $('f-trail').onchange = (e) => { S.trail = +e.target.value; save(); };
   $('f-follow').onsubmit = (e) => { e.preventDefault(); setFollow($('f-flight').value); $('f-flight').blur(); };

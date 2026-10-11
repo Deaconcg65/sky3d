@@ -2,6 +2,10 @@
 
 Live aircraft from a readsb or dump1090 receiver, drawn in three dimensions in a web browser. The camera glides from aircraft to aircraft, settles beside each one, then pulls back to the whole sky.
 
+New in version 3.1:
+
+- The network edition reads the flight network through a relay, because browsers may not read it directly. See "The relay" below.
+
 New in version 3:
 
 - The network edition, described above. In it, any aircraft your antenna hears is drawn from your antenna. The flight network only fills in the rest. The caption says which is which, and the corner readout counts both.
@@ -50,6 +54,12 @@ It starts centered between LaGuardia and Kennedy in New York. If you are somewhe
 To remove it: `sudo rm -r /var/www/html/sky`
 
 The page reads `/tar1090/data/aircraft.json` once a second. It also looks in `/data/` and `/skyaware/data/`, so a dump1090-fa receiver works too. To point it somewhere else, add `?data=/some/path/` to the address.
+
+## The relay (network edition only)
+
+Web browsers are not allowed to read the free flight networks directly, because those networks do not give web pages that permission. The network edition therefore reads them through a relay: a few lines of code, in `relay/worker.js`, that fetch the list and hand it on. It runs as a Cloudflare Worker on the free plan (100,000 requests a day at the time of writing) and passes on only three kinds of question: aircraft around a point, one flight by callsign, and one aircraft by registration.
+
+To run your own: create a free Cloudflare account, create a Worker, replace its code with the contents of `relay/worker.js`, and deploy it. Then open the network edition, press S, and paste the Worker's address into "Relay address". Without a relay the network edition still shows everything your own antenna hears.
 
 ## What leaves your network
 
