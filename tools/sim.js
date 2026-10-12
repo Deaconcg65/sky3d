@@ -90,18 +90,19 @@ function dbFile(name) {
   if (!fs.existsSync(fp)) { try { execFileSync('curl', ['-sS', '-f', '-m', '30', '-o', fp, 'https://raw.githubusercontent.com/wiedehopf/tar1090-db/master/db/' + path.basename(name)]); } catch (e) { return null; } }
   return fs.existsSync(fp) ? fs.readFileSync(fp) : null;
 }
-let stall = false, stallNet = false;
+let stall = false, stallNet = false, netAsked = 0;
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x'), T = u.searchParams.has('t') ? +u.searchParams.get('t') : Date.now() / 1000;
   const json = (o, extra) => { res.writeHead(200, Object.assign({ 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' }, extra || {})); res.end(typeof o === 'string' || Buffer.isBuffer(o) ? o : JSON.stringify(o)); };
   if (u.pathname === '/sky/' || u.pathname === '/sky/index.html') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(fs.readFileSync(path.join(root, 'build/sky3d.html'))); }
   if (u.pathname === '/net/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(fs.readFileSync(path.join(root, 'build/sky3d-network.html'))); }
   // stand-in for the flight network: every aircraft in the area, including the low ones the pretend antenna cannot hear
-  if (u.pathname.startsWith('/mock/v2/point/')) { if (stallNet) { res.writeHead(503); return res.end(); } const all = snapshot(T, { all: true }).map(strip).map((a) => Object.assign({ t: 'B738', desc: 'BOEING 737-800' }, a)); return json({ ac: all, msg: 'No error', now: Math.round(T * 1000), total: all.length }, { 'Access-Control-Allow-Origin': '*' }); }
+  if (u.pathname.startsWith('/mock/v2/point/')) { netAsked++; if (stallNet) { res.writeHead(503); return res.end(); } const all = snapshot(T, { all: true }).map(strip).map((a) => Object.assign({ t: 'B738', desc: 'BOEING 737-800' }, a)); return json({ ac: all, msg: 'No error', now: Math.round(T * 1000), total: all.length }, { 'Access-Control-Allow-Origin': '*' }); }
+  if (u.pathname === '/ctl/netasked') return json({ asked: netAsked });   // how many times the stand-in flight network has been asked about an area
   if (u.pathname === '/ctl/stallnet') { stallNet = u.searchParams.get('on') === '1'; return json({ stallNet }); }
   if (u.pathname === '/ctl/stall') { stall = u.searchParams.get('on') === '1'; return json({ stall }); }
-  if (u.pathname === '/tar1090/data/aircraft.json') { if (stall) { res.writeHead(503); return res.end(); } return json({ now: +T.toFixed(1), messages: 1234567, aircraft: snapshot(T).map(strip) }); }
-  if (u.pathname === '/tar1090/data/receiver.json') return json({ version: 'sim', refresh: 1000, history: 0 });
+  if (u.pathname === '/tar1090/data/aircraft.json') { if (stall) { res.writeHead(503); return res.end(); } return json({ now: +T.toFixed(1), messages: 1234567, aircraft: snapshot(T).map(strip).map((x) => Object.assign(x, { rssi: -12.3, r_dst: +(gc(HOME, [x.lat, x.lon]) / NM).toFixed(1), r_dir: +brg(HOME, [x.lat, x.lon]).toFixed(1), rr_lat: +HOME[0].toFixed(1), rr_lon: +HOME[1].toFixed(1), mlat: [], nav_modes: ['autopilot'] })) }); }
+  if (u.pathname === '/tar1090/data/receiver.json') return json(Object.assign({ version: 'sim', refresh: 1000, history: 0 }, process.env.SIM_SITE ? { lat: HOME[0], lon: HOME[1], site: { lat: HOME[0], lon: HOME[1] } } : {}));   // SIM_SITE=1: a receiver whose position is set
   if (u.pathname === '/tar1090/version.json') return json({ tar1090Version: 'sim', databaseVersion: 'sim' });
   if (u.pathname.startsWith('/tar1090/db-sim/')) { const b = dbFile(u.pathname.split('/').pop()); if (!b) { res.writeHead(404); return res.end(); } return json(b, { 'Content-Encoding': 'gzip', 'Cache-Control': 'public, max-age=1209600' }); }
   if (u.pathname === '/tar1090/chunks/chunks.json') return json({ chunks: ['chunk_1.gz', 'chunk_2.gz', 'current_large.gz', 'current_small.gz'], chunks_all: [] });
@@ -125,6 +126,7 @@ http.createServer((req, res) => {
   if (u.pathname === '/mock/wx') {   // stand-in for the weather service: steady rain with a west wind
     return json({ latitude: +u.searchParams.get('latitude'), longitude: +u.searchParams.get('longitude'), current: { time: '2026-10-10T12:00', temperature_2m: 52.4, weather_code: 63, cloud_cover: 100, wind_speed_10m: 14.2, wind_direction_10m: 262, wind_gusts_10m: 27.5, visibility: 9000, snow_depth: 0 } }, { 'Access-Control-Allow-Origin': '*' });
   }
+  if (u.pathname === '/mock/v2/callsign/REDIR') { res.writeHead(302, { Location: 'http://127.0.0.1:' + PORT + '/tar1090/data/aircraft.json' }); return res.end(); }   // a flight network that tries to point the relay back at the receiver
   if (u.pathname.startsWith('/mock/v2/callsign/')) { const cs = decodeURIComponent(u.pathname.split('/').pop()); return json({ ac: cs === 'DAL2210' ? [farFlight(T)] : [], msg: 'No error', now: Math.round(T * 1000), total: cs === 'DAL2210' ? 1 : 0 }); }
   if (u.pathname.startsWith('/mock/v2/')) return json({ ac: [], msg: 'No error', now: Math.round(T * 1000), total: 0 });
   res.writeHead(404); res.end('not found');

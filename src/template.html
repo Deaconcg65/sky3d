@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3.4, /*EDITION*/.
+  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3.5, /*EDITION*/.
   One self-contained page. Put it on the receiver's web server and open it in a browser.
   Includes three.js (c) 2010-2024 three.js authors, MIT License.
   Shorelines: GSHHG (Wessel and Smith, LGPL) and Natural Earth (public domain). State lines: United States Census Bureau.
@@ -66,6 +66,7 @@ body.panel #panel { transform: none; }
 #panel .note { color: var(--faint); font-size: 12.5px; margin-top: 6px; line-height: 1.4; min-height: 1em; }
 #panel .check { display: flex; align-items: center; gap: 10px; margin-top: 18px; color: var(--ink); font-size: 15px; }
 #panel .check input { width: 18px; height: 18px; accent-color: var(--lamp); }
+body.shared #panel .home-only { display: none; }
 #panel hr { border: 0; border-top: 1px solid var(--line); margin: 22px 0 6px; }
 #panel dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 14px 0 0; font-size: 13px; color: var(--soft); }
 #panel dt { color: var(--ink); } #panel dd { margin: 0; }
@@ -98,15 +99,17 @@ body.panel #panel { transform: none; }
 
   <label for="f-src">Aircraft from</label>
   <select id="f-src"><option value="blend">My antenna and the flight network</option><option value="antenna">My antenna only</option><option value="network">The flight network only</option></select>
-  <div class="note">Your antenna comes first. The flight network fills in what it cannot hear, and is all there is when no receiver is in reach. Flight network data by <b>ADSB.lol</b>.</div>
+  <div class="note">The antenna comes first. The flight network fills in what it cannot hear, and is all there is when no receiver is in reach. Flight network data by <b>ADSB.lol</b>.</div>
 
   <label for="f-netmax">Most aircraft to take from the flight network</label>
   <select id="f-netmax"><option value="25">25</option><option value="50">50</option><option value="75">75</option><option value="100">100</option><option value="130">130, the most</option></select>
-  <div class="note">The nearest ones are kept. Aircraft your own antenna hears are always shown and do not count toward this. Choose fewer if the picture is not smooth.</div>
+  <div class="note">The nearest ones are kept. Aircraft the antenna hears are always shown and do not count toward this. Choose fewer if the picture is not smooth.</div>
 
+  <div class="home-only">
   <label for="f-relay">Relay address</label>
   <input id="f-relay" type="text" autocomplete="off" spellcheck="false" style="text-transform:none">
   <div class="note">Web browsers may not read the flight network directly, so it is fetched through a small relay that runs on your receiver. Leave this empty to use the relay on the receiver this page came from.</div>
+  </div>
 <!--/NET-->
 
   <label for="f-center">Center the sky on</label>
@@ -123,7 +126,9 @@ body.panel #panel { transform: none; }
     <input id="f-pname" type="text" maxlength="28" placeholder="Name, for example My House" autocomplete="off" spellcheck="false">
     <input id="f-pll" type="text" maxlength="60" placeholder="Latitude, longitude: 40.6892, -74.0445" autocomplete="off" spellcheck="false" aria-label="Latitude and longitude" style="margin-top:8px">
     <button type="submit" class="quiet" style="margin-top:8px">Add this place</button>
-    <div class="note" id="places-note">Paste the latitude and longitude from Google Earth or Google Maps. Each place gets a label on the ground and joins the list above. Places are kept in this browser only.</div>
+    <div class="note" id="places-note">Paste the latitude and longitude from Google Earth or Google Maps. Each place gets a label on the ground and joins the list above.</div>
+    <label class="check" style="margin-top:12px"><input id="f-keep" type="checkbox"> Keep my places on this device</label>
+    <div class="note">Your places stay on this device. They are never sent to this site or saved on it. Only a rough position, to about seven miles, is used to ask for the aircraft and the weather there. With the box unticked, your places are forgotten when you close this page.</div>
   </form>
 
   <label for="f-radius">Visit aircraft within</label>
@@ -168,7 +173,7 @@ body.panel #panel { transform: none; }
     <dt>L</dt><dd>Listen to air traffic control near the view, on LiveATC.net</dd>
     <dt>S</dt><dd>Open or close these settings</dd>
   </dl>
-  <p class="note" style="margin-top:22px">Version 3.4, /*EDITION*/, October 11, 2026</p>
+  <p class="note" style="margin-top:22px">Version 3.5, /*EDITION*/, October 12, 2026</p>
 </aside>
 <script type="application/json" id="geo-data">/*GEO*/</script>
 <script type="application/json" id="airport-data">/*AIRPORTS*/</script>

@@ -19,14 +19,27 @@ const PRESETS = [
 ];
 if (__NET__) PRESETS.push(['KBOS', 'Boston'], ['KPHL', 'Philadelphia'], ['KDCA', 'Washington National'], ['KATL', 'Atlanta'], ['KMIA', 'Miami'], ['KORD', 'Chicago O\'Hare'], ['KDFW', 'Dallas Fort Worth'],
   ['KDEN', 'Denver'], ['KLAX', 'Los Angeles'], ['KSFO', 'San Francisco'], ['KSEA', 'Seattle']);
-const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr', src: 'blend', relay: '', netmax: 130, places: [] };
+const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr', src: 'blend', relay: '', netmax: 130, places: [], keep: null };
+// SHARED: the page was opened at a secure web address, which is how a receiver is shared with people outside the house.
+// At home it is opened at the receiver's own plain address.
+const SHARED = Q.has('shared') ? Q.get('shared') !== '0' : location.protocol === 'https:';
+const ANT = SHARED ? "this site's antenna" : 'your antenna';
 const S = Object.assign({}, DEFAULTS);
 try { Object.assign(S, JSON.parse(localStorage.getItem('sky3d') || '{}')); } catch (e) { /* storage unavailable */ }
 for (const k of Object.keys(DEFAULTS)) if (Q.has(k) && typeof DEFAULTS[k] !== 'object') { const v = Q.get(k); S[k] = typeof DEFAULTS[k] === 'number' ? +v : typeof DEFAULTS[k] === 'boolean' ? v !== '0' && v !== 'false' : v; }
-const save = () => { try { localStorage.setItem('sky3d', JSON.stringify(S)); } catch (e) { /* ignore */ } };
-let home = null;   // receiver position, if the receiver has one set
-// The viewer's own places ("My House" and so on). They are kept in this browser only and are never sent anywhere.
+// The viewer's own places ("My House" and so on). They live in this browser and nowhere else: they are never sent to the
+// receiver or saved on it. On a shared address they are not even kept in the browser unless the viewer asks for that, so
+// nothing is left behind on a borrowed or public computer. Without "keep", they last until the page is closed.
 const placeList = () => (Array.isArray(S.places) ? S.places : []);
+if (Q.has('keep')) S.keep = Q.get('keep') !== '0'; else if (typeof S.keep !== 'boolean') S.keep = !SHARED || placeList().length > 0;
+const save = () => {
+  try {
+    const out = Object.assign({}, S);
+    if (!S.keep) { out.places = []; if (/^P\d+$/.test(out.center)) out.center = DEFAULTS.center; }
+    localStorage.setItem('sky3d', JSON.stringify(out));
+  } catch (e) { /* ignore */ }
+};
+let home = null;   // receiver position, if the receiver has one set
 // Reads a latitude and longitude as copied from Google Maps (40.6892, -74.0445) or Google Earth (40°41'21"N 74°02'40"W).
 function parseLatLon(text) {
   const s = String(text || '').replace(/[\u2032\u2019]/g, "'").replace(/[\u2033\u201d]/g, '"').replace(/''/g, '"');
@@ -242,7 +255,7 @@ function updateCorner(date) {
   if (__NET__) {
     const t = nowS(); let ant = 0, nw = 0; for (const p of planes.values()) if (p.fresh(t) && !p.remote) { if (p.tAnt && t - p.tAnt < 20) ant++; else nw++; }
     const pl = (n) => n + (n === 1 ? ' aircraft' : ' aircraft');
-    set('k-src', S.src === 'antenna' ? (dataBase ? pl(ant) + ' heard by your antenna' : '') : !dataBase || S.src === 'network' ? (net.ok ? pl(nw) + ' from the flight network' : '') : net.ok ? ant + ' by your antenna, ' + nw + ' more from the flight network' : pl(ant) + ' heard by your antenna');
+    set('k-src', S.src === 'antenna' ? (dataBase ? pl(ant) + ' heard by ' + ANT : '') : !dataBase || S.src === 'network' ? (net.ok ? pl(nw) + ' from the flight network' : '') : net.ok ? ant + ' by ' + ANT + ', ' + nw + ' more from the flight network' : pl(ant) + ' heard by ' + ANT);
   }
 }
 
@@ -405,6 +418,9 @@ function netSources() {
   const rb = Q.has('netApi') && !Q.has('relay') ? '' : relayBase(); return rb ? [{ name: 'the relay', every: 5, url: point(rb + '/v2/') }].concat(direct) : direct;
 }
 const net = { i: 0, ok: null, last: -1e9, lastGood: -1e9, fails: 0, busy: false, name: '' };
+// When several people watch the same sky the relay hands out one shared answer and says how many seconds old it is.
+// Adding that to each aircraft's own age puts it where it is now, not where it was.
+function aged(list, d) { const age = +d.relay_age || 0; if (age > 0) for (const a of list) a.seen_pos = (a.seen_pos || 0) + age; return list; }
 function netRadiusNm() { const mi = S.radius > 0 ? Math.max(S.radius * 1.5, 40) : 140; return Math.round(clamp(mi * 0.869, 35, 130)); }
 async function netTick(force) {
   if (!__NET__ || S.src === 'antenna' || net.busy || (!MANUAL && document.hidden)) return;
@@ -413,8 +429,11 @@ async function netTick(force) {
   // ask around the centre of the sky, or around a followed flight once it has left that area
   const far = follow.state === 'on' && gcDist(C.lat, C.lon, pose.lat, pose.lon) > 60, la = far ? pose.lat : C.lat, lo = far ? pose.lon : C.lon;
   try {
-    const d = await getJSON(src.url(la.toFixed(3), lo.toFixed(3), netRadiusNm()) + (MANUAL && fakeT ? '?t=' + fakeT : ''));
+    // The question is rounded to a tenth of a degree, about seven miles, and reaches a little wider to make up for it. So the exact
+    // spot on screen, which may be somebody's house, never leaves this browser, and people watching the same area share one answer.
+    const d = await getJSON(src.url((Math.round(la * 10) / 10).toFixed(1), (Math.round(lo * 10) / 10).toFixed(1), netRadiusNm() + 5) + (MANUAL && fakeT ? '?t=' + fakeT : ''));
     const list = (d.ac || d.aircraft || []).filter((a) => a && a.lat != null && a.lon != null && a.alt_baro !== 'ground');
+    aged(list, d);
     for (const a of list) a._d = gcDist(la, lo, a.lat, a.lon);
     list.sort((x, y) => x._d - y._d);
     if (S.src !== 'antenna') ingest(list.slice(0, clamp(Math.round(S.netmax) || NET_CAP, 10, NET_CAP)), 0, 2);   // the nearest ones, up to the limit chosen in the settings
@@ -542,8 +561,8 @@ async function followTick() {
     try {
       const posApi = __NET__ && relayBase() && !Q.has('posApi') ? relayBase() + '/v2/' : POS_API;
       const d = await getJSON(posApi + 'callsign/' + encodeURIComponent(follow.want) + (MANUAL && fakeT ? '?t=' + fakeT : '')); follow.netOk = true;
-      let ac = (d.ac || d.aircraft || []).filter((a) => a.lat != null);
-      if (!ac.length && /^[A-Z]-?[A-Z0-9]{3,5}$|^N\d/.test(follow.want)) { const d2 = await getJSON(posApi + 'reg/' + encodeURIComponent(follow.want)); ac = (d2.ac || d2.aircraft || []).filter((a) => a.lat != null); }
+      let ac = aged((d.ac || d.aircraft || []).filter((a) => a.lat != null), d);
+      if (!ac.length && /^[A-Z]-?[A-Z0-9]{3,5}$|^N\d/.test(follow.want)) { const d2 = await getJSON(posApi + 'reg/' + encodeURIComponent(follow.want)); ac = aged((d2.ac || d2.aircraft || []).filter((a) => a.lat != null), d2); }
       if (ac.length) ingest([ac[0]], 0, 1);
     } catch (e) { follow.netOk = false; }
   }
@@ -700,7 +719,7 @@ function updateCaption(t) {
     if (p.gs > 1) bits.push(`${fmtInt(p.gs * 1.15078)} mph`);
     const h = bits.map((b) => `<b>${b}</b>`).join('');
     if ($('c-data')._h !== h) { $('c-data').innerHTML = h; $('c-data')._h = h; }
-    if (__NET__) { const mark = dataBase && S.src === 'blend' && !p.remote ? (p.tAnt && t - p.tAnt < 20 ? 'Heard by your antenna' : 'From the flight network') : ''; const n = $('c-src'); if (n._t !== mark) { n._t = mark; n.textContent = mark; n.hidden = !mark; } }
+    if (__NET__) { const mark = dataBase && S.src === 'blend' && !p.remote ? (p.tAnt && t - p.tAnt < 20 ? 'Heard by ' + ANT : 'From the flight network') : ''; const n = $('c-src'); if (n._t !== mark) { n._t = mark; n.textContent = mark; n.hidden = !mark; } }
     let prog = '';
     if (shot.kind === 'follow' && rt) {
       const ap = rt._airports, a = ap[0], b = ap[ap.length - 1];
@@ -708,8 +727,8 @@ function updateCaption(t) {
       $('c-bar').style.width = (frac * 100).toFixed(1) + '%';
       const mins = p.gs > 60 ? (left / (p.gs * 1.852)) * 60 : null;
       prog = `${fmtInt(left / MI)} miles to go` + (mins ? `, about ${mins >= 90 ? (mins / 60).toFixed(1).replace('.0', '') + ' hours' : fmtInt(Math.max(mins, 1)) + ' minutes'}` : '');
-      if (p.remote) prog += '. Beyond your antenna, position from ADSB.lol';
-    } else if (shot.kind === 'follow' && p.remote) prog = 'Beyond your antenna, position from ADSB.lol';
+      if (p.remote) prog += '. Beyond ' + ANT + ', position from ADSB.lol';
+    } else if (shot.kind === 'follow' && p.remote) prog = 'Beyond ' + ANT + ', position from ADSB.lol';
     $('c-prog').hidden = !(shot.kind === 'follow' && rt); $('c-progtext').textContent = prog; $('c-progtext').hidden = !prog;
   }
   if (show !== capShown) { capShown = show; $('cap').classList.toggle('on', show); }
@@ -719,7 +738,7 @@ function updateCaption(t) {
   if (__NET__ && !dataBase && netOn) msg = net.ok === false ? (relayBase() || Q.has('netApi') ? 'The flight network is not answering. Trying again.' : 'This copy cannot reach the flight network by itself. The network edition needs its relay, which runs on a receiver at home.') : '';
   else if (!dataBase) msg = pollFails >= 2 ? (__NET__ ? 'No receiver found here. To watch without one, open the settings and choose the flight network under "Aircraft from".' : 'No receiver found. Open this page from the address of the Raspberry Pi, not from the downloaded file.') : '';
   else if (t - lastGood > 15 && !(netOn && net.ok)) msg = 'The receiver has stopped answering. Trying again.';
-  else if (follow.want && follow.state === 'looking' && t - follow.since > 4) msg = follow.netOk ? `Looking for ${follow.want}. It is not in the air within reach yet.` : `Looking for ${follow.want} with your antenna only. The internet lookup did not answer.`;
+  else if (follow.want && follow.state === 'looking' && t - follow.since > 4) msg = follow.netOk ? `Looking for ${follow.want}. It is not in the air within reach yet.` : `Looking for ${follow.want} with ${ANT} only. The internet lookup did not answer.`;
   else if (shot.kind === 'wide' && t - shot.t0 > shot.dur + shot.hold + 3 && !paused && !candidates().length) msg = planes.size ? `No aircraft within ${S.radius} miles of ${C.short} right now.` : 'No aircraft heard right now.';
   else if (paused && shot.kind === 'visit') msg = 'Holding on this aircraft. Press the space bar to move on.';
   if ($('msg')._t !== msg) { $('msg')._t = msg; if (msg) $('msg').textContent = msg; $('msg').classList.toggle('on', !!msg); }
@@ -756,7 +775,7 @@ function addPlace() {
   if (!ll) { note.textContent = 'I could not read that as a latitude and longitude. It should look like 40.6892, -74.0445'; return; }
   if (placeList().length >= 20) { note.textContent = 'That is the limit of 20 places. Remove one first.'; return; }
   S.places = placeList().concat([{ n: name, lat: ll.lat, lon: ll.lon }]); save();
-  $('f-pname').value = ''; $('f-pll').value = ''; note.textContent = name + ' added. It is kept in this browser only.';
+  $('f-pname').value = ''; $('f-pll').value = ''; note.textContent = name + (S.keep ? ' added. It is kept on this device only.' : ' added. It will be forgotten when you close this page.');
   buildCenterOptions(); renderPlaces(); rebuildLabels();
 }
 function applyCenter() {
@@ -781,6 +800,11 @@ function initPanel() {
   if (__NET__) $('f-src').onchange = (e) => { S.src = e.target.value; save(); netTick(true); updateCorner(simClock || new Date()); };
   $('f-trail').onchange = (e) => { S.trail = +e.target.value; save(); };
   renderPlaces(); $('f-places').onsubmit = (e) => { e.preventDefault(); addPlace(); };
+  $('f-keep').checked = !!S.keep; $('f-keep').onchange = (e) => { S.keep = e.target.checked; save(); $('places-note').textContent = S.keep ? 'Your places will be kept on this device.' : 'Your places are no longer kept. They will be forgotten when you close this page.'; };
+  if (SHARED) {   // a guest is not looking at an antenna of their own, and has no relay to point at
+    document.body.classList.add('shared');
+    if (__NET__) { const o = $('f-src').options; o[0].textContent = "This site's antenna and the flight network"; o[1].textContent = "This site's antenna only"; }
+  }
   $('listen').onclick = () => openListen();
   $('f-follow').onsubmit = (e) => { e.preventDefault(); setFollow($('f-flight').value); $('f-flight').blur(); };
   $('f-stop').onclick = () => setFollow('');
