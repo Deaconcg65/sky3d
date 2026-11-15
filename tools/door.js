@@ -70,6 +70,24 @@ const OUT = { 'CF-Connecting-IP': '203.0.113.7' };   // what a request looks lik
   const redir = await get('/sky-relay/v2/callsign/REDIR', OUT);
   check('a flight network cannot point the relay back at the receiver', redir.status === 502 && !/rssi|r_dst|hex/.test(redir.text), 'got ' + redir.status);
 
+  // 3b. typed places (version 3.7): only the words go out, the answer is cut to a name and a position, and answers are kept
+  const placed = async () => JSON.parse((await get('/ctl/placeasked', {}, SIM)).text);
+  const pl0 = (await placed()).asked;
+  const pl = await get('/sky-relay/place/' + encodeURIComponent('Fairfield,  CT'), OUT), plj = JSON.parse(pl.text || '{}'), sent = await placed();
+  check('a typed place is looked up and answered', pl.status === 200 && Array.isArray(plj.places) && plj.places.length === 3 && plj.places[0].lat === 41.1414, 'got ' + pl.status + ' ' + pl.text.slice(0, 80));
+  check('only the typed words, tidied, go to the place finder, with the relay named', sent.last && sent.last.q === 'Fairfield, CT' && /3d-sky-relay/.test(sent.last.agent) && sent.last.keys === 'format,limit,q', JSON.stringify(sent.last));
+  check('a place answer holds a name and a position and nothing else', plj.places && plj.places.every((x) => Object.keys(x).sort().join() === 'kind,lat,lon,name' && isFinite(x.lat)), JSON.stringify(plj).slice(0, 120));
+  const plAgain = await get('/sky-relay/place/fairfield%2C%20ct', { 'CF-Connecting-IP': '203.0.113.20' });
+  check('the same words again are answered from what was kept, for anyone', plAgain.status === 200 && (await placed()).asked === pl0 + 1, 'asked ' + ((await placed()).asked - pl0) + ' time(s)');
+  const quick = await get('/sky-relay/place/Bridgeport', { 'CF-Connecting-IP': '203.0.113.21' });
+  check('a second new place within a second waits its turn', quick.status === 503, 'got ' + quick.status);
+  await sleep(1100); const later = await get('/sky-relay/place/Bridgeport', { 'CF-Connecting-IP': '203.0.113.21' });
+  check('and is answered a second later', later.status === 200, 'got ' + later.status);
+  for (const [bad, why] of [['a', 'one letter'], ['%00abc', 'a control character'], ['%FF%FEab', 'not text'], ['x'.repeat(101), 'over 100 letters'], ['ab/cd', 'a slash']]) {
+    const r = await get('/sky-relay/place/' + bad, OUT); check('a place with ' + why + ' is refused', r.status === 404, 'got ' + r.status);
+  }
+  await sleep(1100);
+
   // 4. pages on other sites are refused; the page from the same address is not
   const p = '/sky-relay/v2/point/40.7/-73.8/60';
   const other = await get(p, Object.assign({ Origin: 'https://some-other-site.example' }, OUT)); check('a page on another site is refused', other.status === 403 && !other.headers['access-control-allow-origin']);
