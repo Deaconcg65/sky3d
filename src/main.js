@@ -427,7 +427,7 @@ async function netTick(force) {
   const list0 = netSources(), t = nowS(), src = list0[net.i % list0.length]; if (!force && t - net.last < src.every) return;
   net.busy = true; net.last = t;
   // ask around the centre of the sky, or around a followed flight once it has left that area
-  const far = follow.state === 'on' && gcDist(C.lat, C.lon, pose.lat, pose.lon) > 60, la = far ? pose.lat : C.lat, lo = far ? pose.lon : C.lon;
+  const far = followOwns() && gcDist(C.lat, C.lon, pose.lat, pose.lon) > 60, la = far ? pose.lat : C.lat, lo = far ? pose.lon : C.lon;
   try {
     // The question is rounded to a tenth of a degree, about seven miles, and reaches a little wider to make up for it. So the exact
     // spot on screen, which may be somebody's house, never leaves this browser, and people watching the same area share one answer.
@@ -536,6 +536,8 @@ async function getRoute(p) {
   return null;
 }
 const follow = { want: '', hex: null, lastRemote: 0, state: 'off', since: 0, netOk: true, tour: false };   // tour: the viewer pressed A, so the followed flight waits
+// Follow has the camera only while a flight is found and the viewer has not paused it with A
+function followOwns() { return follow.state === 'on' && !follow.tour; }
 function parseFlight(s) {
   s = (s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); if (!s) return '';
   const m = s.match(/^([A-Z0-9]{2})(\d{1,4}[A-Z]?)$/); if (m && IATA2ICAO[m[1]] && !/^[A-Z]{3}/.test(s)) return IATA2ICAO[m[1]] + m[2];
@@ -609,7 +611,7 @@ function lockOn(p) {
 }
 function autoTour() { clicked = null; clickUntil = 0; paused = false; if (follow.want) follow.tour = true; goWide(); }
 // leaving fly mode or a locked aircraft: go back to following a flight if one is being followed, otherwise to the tour
-function leaveControls() { const fp = follow.state === 'on' && !follow.tour && planes.get(follow.hex); clicked = null; clickUntil = 0; if (fp) startFollow(fp); else goWide(); }
+function leaveControls() { const fp = followOwns() && planes.get(follow.hex); clicked = null; clickUntil = 0; paused = false; if (fp) startFollow(fp); else goWide(); }
 function flyStep(dt) {
   if (shot.kind !== 'fly') return;
   const mv = (held.has('ArrowUp') ? 1 : 0) - (held.has('ArrowDown') ? 1 : 0), turn = (held.has('ArrowRight') ? 1 : 0) - (held.has('ArrowLeft') ? 1 : 0);
@@ -697,7 +699,7 @@ function updateCamera(t) {
   const el = t - shot.t0;
   if (shot.kind === 'fly') { if (S.flyBack > 0 && t - fly.last > S.flyBack) leaveControls(); }
   else if (shot.lock) { const lp = shot.plane; if (!lp || !planes.has(lp.hex) || lp.opacity < 0.25 || !lp.fresh(t)) leaveControls(); }
-  else if (follow.state === 'on' && !follow.tour && planes.get(follow.hex)) {
+  else if (followOwns() && planes.get(follow.hex)) {
     if (shot.kind !== 'follow' || shot.plane !== planes.get(follow.hex)) { if (el > shot.dur) startFollow(planes.get(follow.hex)); }
     else if (el > shot.dur && t - shot.tSub > 38) { livePose(shot, t, TP); shot.subFrom = [TP.dist, TP.el]; shot.sub++; shot.tSub = t; shot.subT = t; }
   } else if (shot.kind === 'wide') {
@@ -901,11 +903,11 @@ function initPanel() {
     if (document.body.classList.contains('panel')) { if (k === 's' || k === 'S') togglePanel(); return; }   // with the settings open, only S and Escape do anything
     if (!$('find').hidden) return;
     if (e.repeat && !flying && (k === 'f' || k.indexOf('Arrow') === 0)) return;   // a key held down from before Escape must not take the controls again
-    const nextAircraft = () => { clicked = null; clickUntil = 0; paused = false; const p = pickNext(); if (p && follow.state !== 'on') startVisit(p); };
+    const nextAircraft = () => { clicked = null; clickUntil = 0; paused = false; const p = pickNext(); if (p && !followOwns()) startVisit(p); };
     if (k === ' ') { paused = !paused; e.preventDefault(); }
     else if (k === 'n' || (k === 'ArrowRight' && !flying)) nextAircraft();
     else if (k === 'a' || k === 'A') autoTour();
-    else if (k === 'w' || k === 'W') { clicked = null; clickUntil = 0; paused = false; if (follow.state !== 'on' || flying || shot.lock) goWide(); }
+    else if (k === 'w' || k === 'W') { clicked = null; clickUntil = 0; paused = false; if (!followOwns() || flying || shot.lock) goWide(); }
     else if (k === 'f') enterFly();
     else if (k === 'F') { if (document.fullscreenElement) document.exitFullscreen(); else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {}); }
     else if (k === '+' || k === '=') zoomFly(0.8);
@@ -1131,7 +1133,7 @@ if (S.follow) setFollow(S.follow);
 if (!MANUAL) { poll(); setInterval(followTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, routes, held, get clicked() { return clicked; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
   net, NET: __NET__ };

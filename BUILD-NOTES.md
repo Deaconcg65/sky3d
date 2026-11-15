@@ -14,10 +14,11 @@ A self-contained 3D web page that shows live aircraft from a home Raspberry Pi A
 - Search over the aircraft the page is tracking: airline, flight number, tail number, plane type, origin or destination. Routes come from one batched request to the volunteer route table when the box opens, and a route that fails the nearness guard is shown as "route not known".
 - Milwaukee added to the airport list. New York remains the default.
 - Review fixes from Codex (commit 11155c8): fly mode direction, A with Follow, keyboard ownership while windows are open, stale search picks, scrolling search on short screens, on-screen-only clicks, database tail numbers, the 737 MAX alias, one request per database shard, screen reader support for results, a guard for incomplete route entries.
+- Second Codex review (on GitHub, of commit 05b5935): after A pauses Follow, W and N or right arrow work again for the tour, and Escape or the fly timeout clears a Space hold so the tour moves on. One helper, followOwns(), now decides whether Follow has the camera; the network area lookup uses it too, so a paused Follow no longer pulls the network question toward the followed flight. Two checks were added to tools/controls.js for these.
 
 ## Left to do, in order
 
-1. Codex reviews commit 11155c8. Findings come back to Claude to check and fix. Do not merge before this.
+1. Codex reviews the branch on GitHub ("@codex review" on pull request 1; AGENTS.md gives it this file and the deliberate decisions). Findings come back to Claude to check and fix. Do not merge before Codex has no new real findings.
 2. Merge the pull request. Then on the Raspberry Pi, run the installer line from the README and confirm the settings window ends with "Version 3.6, network edition, November 15, 2026".
 3. Version 3.7: watch list (first entry N2RF, a Citation CJ4) and typed locations (airport, city or zip first; street addresses only with a privacy notice).
 4. Version 3.8: aircraft gallery with realistic shapes (757, Gulfstream, Airbus, Citation CJ4, helicopter), a legend page with airline and military paint, and paint options for other aircraft including silly ones.
@@ -55,6 +56,8 @@ The simulator serves the home edition at http://localhost:8090/sky/ and the netw
     node tools/shot.js         screenshots at chosen times
     node tools/live.js         the network edition with and without a receiver in reach
     node tools/door.js         the relay front door
+
+The review loop on November 15 ran in a container with no browser, so the checks added there were written but not run; run node tools/controls.js once on a machine with Chromium before merging.
 
 Things not tested: touch screens, Safari, a real antenna's data, the shared address through Cloudflare. The simulator has no real aircraft types, so plane type search was checked by logic and with fixtures, not with live data. Weather requests to the outside are blocked in the test environment, so a console error about them in the tests is expected.
 

@@ -69,6 +69,19 @@ const { chromium } = require('playwright');
   const cs = await page.evaluate(() => { const p = [...window.__sky.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.callsign() && !q.remote); window.__sky.setFollow(p.callsign()); return p.callsign(); });
   await page.waitForTimeout(8000); const k1 = await kind(); await page.keyboard.press('a'); await page.waitForTimeout(16000); const k2 = await kind();
   ok('A leaves a followed flight alone', k1 === 'follow' && k2 !== 'follow', `following ${cs}: ${k1} then ${k2}`);
+  // after A pauses Follow, the tour keys work again (Codex review of 05b5935)
+  await page.keyboard.press('n'); await page.waitForTimeout(500); const k3 = await kind();
+  await page.keyboard.press('w'); await page.waitForTimeout(500); const k4 = await kind();
+  ok('after A, N visits another aircraft and W pulls back', k3 === 'visit' && k4 === 'wide', `${k3} then ${k4}`);
+  // Escape out of a held, locked aircraft resumes the tour (Codex review of 05b5935)
+  await page.evaluate(() => { const s = window.__sky; s.setFollow(''); const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5); s.lockOn(p); });
+  await page.waitForTimeout(300); await page.keyboard.press(' '); const held1 = await page.evaluate(() => window.__sky.paused);
+  await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+  const after2 = await page.evaluate(() => ({ paused: window.__sky.paused, kind: window.__sky.shot.kind }));
+  ok('Escape from a held aircraft clears the hold', held1 && !after2.paused && after2.kind === 'wide', JSON.stringify(after2));
+  // the same after fly mode
+  await page.keyboard.press('f'); await page.waitForTimeout(200); await page.keyboard.press(' '); await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+  ok('Escape from fly mode clears the hold', await page.evaluate(() => !window.__sky.paused && window.__sky.shot.kind === 'wide'));
   console.log('errors:', errs.join(' ; ') || 'none');
   await browser.close();
 })();
