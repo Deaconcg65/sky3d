@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3.8, /*EDITION*/.
+  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3.8.1, /*EDITION*/.
   One self-contained page. Put it on the receiver's web server and open it in a browser.
   Includes three.js (c) 2010-2024 three.js authors, MIT License.
   Shorelines: GSHHG (Wessel and Smith, LGPL) and Natural Earth (public domain). State lines: United States Census Bureau.
@@ -37,6 +37,8 @@ body { cursor: none; } body.awake { cursor: default; }
 #c-src { font-size: 1.75vh; color: var(--soft); margin-top: 1.3vh; letter-spacing: 0.03em; }
 #msg { position: fixed; left: 5.2vw; top: 6vh; max-width: 60vw; font-size: 2.2vh; color: var(--soft); opacity: 0; transition: opacity 1.4s ease; pointer-events: none; text-shadow: 0 1px 12px rgba(0,0,0,0.6); z-index: 2; }
 #msg.on { opacity: 1; }
+#flykeys { position: fixed; right: 2.2vw; bottom: calc(3.4vh + 56px); z-index: 2; font-size: 13px; line-height: 1.55; color: var(--soft); background: rgba(14,22,36,0.55); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; opacity: 0; transition: opacity 0.6s ease; pointer-events: none; text-shadow: 0 1px 6px rgba(0,0,0,0.5); }
+#flykeys.on { opacity: 1; } body.panel #flykeys { opacity: 0; } #flykeys b { color: var(--ink); font-weight: 500; display: inline-block; min-width: 7.2em; }
 #corner { position: fixed; right: 3vw; top: 5vh; text-align: right; font-size: 1.9vh; line-height: 1.5; color: var(--ink); opacity: 0; transition: opacity 1.6s ease; pointer-events: none; z-index: 2;
   text-shadow: 0 0 14px rgba(8,16,30,0.75), 0 1px 3px rgba(8,16,30,0.7), 0 0 1px rgba(8,16,30,0.6); font-variant-numeric: tabular-nums; white-space: pre; }
 #corner.on { opacity: 1; } body.panel #corner { opacity: 0; }
@@ -124,6 +126,7 @@ body.shared #panel .home-only { display: none; }
 </div>
 <div id="shade"></div>
 <div id="msg" role="status"></div>
+<div id="flykeys" aria-label="Fly mode keys"><div><b>Up and down</b> forward and back</div><div><b>Left and right</b> turn</div><div><b>Shift with up or down</b> climb or descend</div><div><b>Plus and minus</b> zoom</div><div><b>Drag</b> look around</div><div><b>Escape</b> stop flying</div></div>
 <div id="corner"><div id="k-top"><span id="k-time"></span><span id="k-phase"></span></div><div id="k-sun"></div><div id="k-wx"></div><!--NET--><div id="k-src"></div><!--/NET--></div>
 <button id="listen" type="button" hidden></button>
 <button id="findbtn" type="button">Search</button>
@@ -248,7 +251,7 @@ body.shared #panel .home-only { display: none; }
 
   <hr>
   <dl id="keys-dl"></dl>
-  <p class="note" style="margin-top:22px">Version 3.8, /*EDITION*/, November 15, 2026</p>
+  <p class="note" style="margin-top:22px">Version 3.8.1, /*EDITION*/, November 15, 2026</p>
 </aside>
 <script type="application/json" id="geo-data">/*GEO*/</script>
 <script type="application/json" id="airport-data">/*AIRPORTS*/</script>

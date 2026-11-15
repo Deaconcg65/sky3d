@@ -2,6 +2,8 @@
 
 Live aircraft from a readsb or dump1090 receiver, drawn in three dimensions in a web browser. The camera glides from aircraft to aircraft, settles beside each one, then pulls back to the whole sky.
 
+New in version 3.8.1: the arrow keys no longer stop working after a setting is ticked (an arrow key now closes the settings and takes the controls, and a click on the sky closes the settings, My places and search); in fly mode the keys are listed in the lower right corner for as long as you fly; and small planes such as the Cessna 172 are no longer drawn as four-engine airliners, the Hawker business jet no longer as a helicopter, and the Airbus A318 and A319 no longer as wide bodies.
+
 New in version 3.8: satellite photos on the ground, switched on in the settings with "Satellite photos on the ground". The photos are EOxCloudless (Sentinel-2) pictures, free for personal, non-commercial use. Each viewer's browser fetches them straight from EOX, so the receiver does no extra work. Where a photo has not loaded, the drawn map shows as before.
 
 New in version 3.7.1: press P for a small window with just your places; one click moves the sky there. Moving the sky to a far place now rises, fades and comes down instead of gliding across the map (only a fade with the system's reduce motion setting). Captions show where more flights come from, including the leg of a flight that makes a stop. To add one of My places, type an address, a city or a latitude and longitude, then pick the right answer; it is looked up the same way as Find a place. Also fixed: a place added while the page was open in a second tab or window could be lost, and a note could say a place would be forgotten after Keep my places was ticked.
