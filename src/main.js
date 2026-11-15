@@ -499,7 +499,7 @@ async function dbLookup(p) {
       const icao = p.hex.toUpperCase();
       for (let level = 1; level <= 5; level++) {
         const bkey = icao.slice(0, level), dkey = icao.slice(level);
-        const data = db.shards[bkey] || (db.shards[bkey] = await getJSON(db.folder + bkey + '.js', { cache: 'default' }));
+        const data = await (db.shards[bkey] || (db.shards[bkey] = getJSON(db.folder + bkey + '.js', { cache: 'default' }).catch((err) => { delete db.shards[bkey]; throw err; })));
         if (data[dkey]) { const e = data[dkey]; info.reg = info.reg || e[0] || ''; info.type = info.type || e[1] || ''; info.long = info.long || e[3] || ''; break; }
         if (!(data.children && data.children.indexOf(bkey + dkey[0]) !== -1)) break;
       }
@@ -535,14 +535,14 @@ async function getRoute(p) {
   }
   return null;
 }
-const follow = { want: '', hex: null, lastRemote: 0, state: 'off', since: 0, netOk: true };
+const follow = { want: '', hex: null, lastRemote: 0, state: 'off', since: 0, netOk: true, tour: false };   // tour: the viewer pressed A, so the followed flight waits
 function parseFlight(s) {
   s = (s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); if (!s) return '';
   const m = s.match(/^([A-Z0-9]{2})(\d{1,4}[A-Z]?)$/); if (m && IATA2ICAO[m[1]] && !/^[A-Z]{3}/.test(s)) return IATA2ICAO[m[1]] + m[2];
   return s;
 }
 function setFollow(text) {
-  follow.want = parseFlight(text); follow.hex = null; follow.state = follow.want ? 'looking' : 'off'; follow.since = nowS(); follow.lastRemote = 0;
+  follow.tour = false; follow.want = parseFlight(text); follow.hex = null; follow.state = follow.want ? 'looking' : 'off'; follow.since = nowS(); follow.lastRemote = 0;
   S.follow = follow.want; save(); $('f-flight').value = follow.want; $('f-stop').hidden = !follow.want;
 
 }
@@ -607,17 +607,19 @@ function lockOn(p) {
   clicked = null; clickUntil = 0; paused = false; begin('visit', 6, p); shot.lock = true;
   recent.push(p.hex); while (recent.length > 5) recent.shift(); prepareCaption(p);
 }
-function autoTour() { clicked = null; clickUntil = 0; paused = false; goWide(); }
+function autoTour() { clicked = null; clickUntil = 0; paused = false; if (follow.want) follow.tour = true; goWide(); }
+// leaving fly mode or a locked aircraft: go back to following a flight if one is being followed, otherwise to the tour
+function leaveControls() { const fp = follow.state === 'on' && !follow.tour && planes.get(follow.hex); clicked = null; clickUntil = 0; if (fp) startFollow(fp); else goWide(); }
 function flyStep(dt) {
   if (shot.kind !== 'fly') return;
   const mv = (held.has('ArrowUp') ? 1 : 0) - (held.has('ArrowDown') ? 1 : 0), turn = (held.has('ArrowRight') ? 1 : 0) - (held.has('ArrowLeft') ? 1 : 0);
   if (!mv && !turn) return;
   fly.last = nowS();
   const scale = Math.max(fly.dist, 2);   // the farther out the camera is, the faster it moves
-  if (turn) fly.az += turn * 50 * dt;
+  if (turn) fly.az -= turn * 50 * dt;   // the camera faces the compass heading of minus its orbit angle, so turning right lowers the angle
   if (mv) {
     if (held.has('Shift')) fly.alt = clamp(fly.alt + mv * scale * 0.05 * dt, 0, 14);
-    else { const a = fly.az * D2R, d = mv * scale * 0.08 * dt; fly.lat += (d * Math.cos(a)) / 111.19; fly.lon += (d * Math.sin(a)) / (111.19 * Math.cos(fly.lat * D2R)); }
+    else { const a = -fly.az * D2R, d = mv * scale * 0.08 * dt; fly.lat += (d * Math.cos(a)) / 111.19; fly.lon += (d * Math.sin(a)) / (111.19 * Math.cos(fly.lat * D2R)); }
   }
 }
 function zoomFly(f) { enterFly(); fly.dist = clamp(fly.dist * f, 0.15, 700); fly.last = nowS(); }
@@ -629,7 +631,8 @@ function planeAt(x, y) {
   for (const p of planes.values()) {
     if (p.lat === null || p.opacity < 0.3 || !p.fresh(t)) continue;
     PV.copy(p.pos).project(camera); if (PV.z > 1 || PV.z < -1) continue;
-    const d = Math.hypot((PV.x * 0.5 + 0.5) * w - x, (-PV.y * 0.5 + 0.5) * h - y);
+    const sx = (PV.x * 0.5 + 0.5) * w, sy = (-PV.y * 0.5 + 0.5) * h; if (sx < 0 || sx > w || sy < 0 || sy > h) continue;
+    const d = Math.hypot(sx - x, sy - y);
     if (d < bd) { bd = d; best = p; }
   }
   return bd < 42 ? best : null;
@@ -692,9 +695,9 @@ const B_E = new THREE.Vector3(), B_N = new THREE.Vector3(), B_U = new THREE.Vect
 function updateCamera(t) {
   // what to look at next
   const el = t - shot.t0;
-  if (shot.kind === 'fly') { if (S.flyBack > 0 && t - fly.last > S.flyBack) goWide(); }
-  else if (shot.lock) { const lp = shot.plane; if (!lp || !planes.has(lp.hex) || lp.opacity < 0.25 || !lp.fresh(t)) goWide(); }
-  else if (follow.state === 'on' && planes.get(follow.hex)) {
+  if (shot.kind === 'fly') { if (S.flyBack > 0 && t - fly.last > S.flyBack) leaveControls(); }
+  else if (shot.lock) { const lp = shot.plane; if (!lp || !planes.has(lp.hex) || lp.opacity < 0.25 || !lp.fresh(t)) leaveControls(); }
+  else if (follow.state === 'on' && !follow.tour && planes.get(follow.hex)) {
     if (shot.kind !== 'follow' || shot.plane !== planes.get(follow.hex)) { if (el > shot.dur) startFollow(planes.get(follow.hex)); }
     else if (el > shot.dur && t - shot.tSub > 38) { livePose(shot, t, TP); shot.subFrom = [TP.dist, TP.el]; shot.sub++; shot.tSub = t; shot.subT = t; }
   } else if (shot.kind === 'wide') {
@@ -751,7 +754,7 @@ function prepareCaption(p) {
   dbLookup(p).then((i) => { if (capPlane === p) capInfo = i; });
 }
 function esc(s) { return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
-function placeName(a) { return ((a.location || a.name || '').split(/[,(/]/)[0].trim()) || a.iata || a.icao; }
+function placeName(a) { return ((String(a.location || a.name || '')).split(/[,(/]/)[0].trim()) || a.iata || a.icao || 'unknown'; }
 function updateCaption(t) {
   if (clicked && t >= clickUntil) { clicked = null; if ((shot.kind === 'visit' || shot.kind === 'follow') && shot.plane && capPlane !== shot.plane) prepareCaption(shot.plane); }
   const cl = !!clicked && capPlane === clicked;
@@ -887,14 +890,17 @@ function initPanel() {
     // Keys pressed while a setting has the keyboard: in a box you type into, every key is typing, so only Escape closes the panel.
     // On a menu, a checkbox or a button, S and Escape still close the panel, and every other key is left for the control itself.
     const el = e.target, tag = el && el.tagName, typing = tag === 'INPUT' && el.type !== 'checkbox';
+    if (e.key === 'Escape') { e.preventDefault(); escapeKey(); return; }   // Escape closes the topmost window first, wherever the keyboard focus is
     if (el && el.id === 'find-q') { findKey(e); return; }
     if (typing) { if (e.key === 'Escape') togglePanel(false); return; }
     if (tag === 'SELECT' || tag === 'INPUT' || tag === 'BUTTON') { if (e.key === 's' || e.key === 'S' || e.key === 'Escape') { e.preventDefault(); togglePanel(e.key === 'Escape' ? false : undefined); } return; }
     if (e.ctrlKey || e.metaKey || e.altKey) return;   // leave the browser's own shortcuts alone
     const k = e.key, flying = shot.kind === 'fly';
     if (k === 'h' || k === 'H' || k === '?') { e.preventDefault(); toggleHelp(); return; }
-    if (k === 'Escape') { escapeKey(); return; }
     if (!$('help').hidden) return;   // while the help is showing, only H, ? and Escape do anything
+    if (document.body.classList.contains('panel')) { if (k === 's' || k === 'S') togglePanel(); return; }   // with the settings open, only S and Escape do anything
+    if (!$('find').hidden) return;
+    if (e.repeat && !flying && (k === 'f' || k.indexOf('Arrow') === 0)) return;   // a key held down from before Escape must not take the controls again
     const nextAircraft = () => { clicked = null; clickUntil = 0; paused = false; const p = pickNext(); if (p && follow.state !== 'on') startVisit(p); };
     if (k === ' ') { paused = !paused; e.preventDefault(); }
     else if (k === 'n' || (k === 'ArrowRight' && !flying)) nextAircraft();
@@ -912,15 +918,17 @@ function initPanel() {
     else if (k === 's' || k === 'S' || k === 'Enter') togglePanel();
   });
   // which keys are down right now, for moving about in fly mode
-  window.addEventListener('keydown', (e) => { const tag = e.target && e.target.tagName; if (tag !== 'INPUT' && tag !== 'SELECT') held.add(e.key); });
+  window.addEventListener('keydown', (e) => { const tag = e.target && e.target.tagName; if (tag === 'INPUT' || tag === 'SELECT' || !$('help').hidden || !$('find').hidden || document.body.classList.contains('panel')) return; held.add(e.key); });
   window.addEventListener('keyup', (e) => { held.delete(e.key); });
   window.addEventListener('blur', () => held.clear());
 }
 function escapeKey() {
+  const ae = document.activeElement; if (ae && ae !== document.body && ae.blur) ae.blur();   // give the keyboard back to the page, so the other keys work again
   if (!$('help').hidden) toggleHelp(false);
   else if (!$('find').hidden) closeFind();
   else if (document.body.classList.contains('panel')) togglePanel(false);
-  else if (shot.kind === 'fly' || shot.lock || clicked) autoTour();
+  else if (shot.kind === 'fly' || shot.lock) leaveControls();
+  else if (clicked) clickUntil = 0;
 }
 // ---------- the mouse: drag to look around, wheel to zoom, click for details, double click to stay with an aircraft ----------
 function canvasControls() {
@@ -929,7 +937,7 @@ function canvasControls() {
   canvas.addEventListener('pointermove', (e) => {
     if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     if (!drag.moved) { if (Math.hypot(dx, dy) < 6) return; drag.moved = true; enterFly(); drag.az = fly.az; drag.el = fly.el; }
-    fly.az = drag.az - dx * 0.25; fly.el = clamp(drag.el + dy * 0.25, 3, 88); fly.last = nowS();
+    fly.az = drag.az + dx * 0.25; fly.el = clamp(drag.el + dy * 0.25, 3, 88); fly.last = nowS();
   });
   const end = (e) => { if (!drag) return; const d = drag; drag = null; if (!d.moved && e.type === 'pointerup') clickAt(e.clientX, e.clientY); };
   canvas.addEventListener('pointerup', end); canvas.addEventListener('pointercancel', end);
@@ -938,7 +946,7 @@ function canvasControls() {
 }
 // ---------- help and search ----------
 const HELP = [
-  ['A', 'Auto tour: pull back, then glide in on one aircraft after another'],
+  ['A', 'Auto tour: pull back, then glide in on one aircraft after another. This pauses Follow until you follow a flight again'],
   ['W', 'Pull back to see the whole area'],
   ['F', 'Fly: take the controls. Drag with the mouse to look around'],
   ['Arrow keys', 'In fly mode, up and down move forward and back, left and right turn. Hold Shift with up or down to climb or descend'],
@@ -962,14 +970,25 @@ function fillKeys() {
     for (const [k, v] of HELP) { const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = k; dd.textContent = v; dl.appendChild(dt); dl.appendChild(dd); }
   }
 }
-function toggleHelp(on) { const h = $('help'), open = on === undefined ? h.hidden : on; h.hidden = !open; if (open) { closeFind(); document.body.classList.add('awake'); } }
-let findSel = 0, findList = [], routesAsked = -1e9;
+function toggleHelp(on) { const h = $('help'), open = on === undefined ? h.hidden : on; h.hidden = !open; if (open) { held.clear(); closeFind(); document.body.classList.add('awake'); } }
+let findSel = 0, findList = [], routesAsked = -1e9, findTimer = 0;
 function openFind() {
-  toggleHelp(false); document.body.classList.remove('panel'); $('find').hidden = false; $('find-q').value = ''; findSel = 0; renderFind(); $('find-q').focus();
+  toggleHelp(false); document.body.classList.remove('panel'); held.clear(); $('find').hidden = false; clearInterval(findTimer); findTimer = setInterval(() => { if (!$('find').hidden) renderFind(); }, 2000); $('find-q').value = ''; findSel = 0; renderFind(); $('find-q').focus();
   let n = 0; for (const p of planes.values()) if (p.lat !== null && !p.info && n++ < 40) dbLookup(p).then(() => { if (!$('find').hidden) renderFind(); }, () => {});
   prefetchRoutes().then(() => { if (!$('find').hidden) renderFind(); });
 }
-function closeFind() { $('find').hidden = true; $('find-q').blur(); }
+function closeFind() { $('find').hidden = true; clearInterval(findTimer); $('find-q').blur(); }
+// an aircraft chosen from the list may have dropped out of reach while the box was open
+function pickFound(p) {
+  if (!p || p.lat === null || !p.fresh(nowS()) || p.opacity < 0.1) { renderFind(); $('find-note').textContent = 'That aircraft is no longer being tracked. Pick another.'; return; }
+  closeFind(); lockOn(p);
+}
+function markFound(i) {
+  findSel = i; const kids = [...$('find-list').children];
+  kids.forEach((li, j) => { li.className = j === i ? 'sel' : ''; li.setAttribute('aria-selected', j === i ? 'true' : 'false'); });
+  $('find-q').setAttribute('aria-activedescendant', kids.length ? 'find-opt-' + i : '');
+  const li = kids[i]; if (li && li.scrollIntoView) li.scrollIntoView({ block: 'nearest' });
+}
 // Origins and destinations come from the same volunteer route table the caption uses. One request covers every aircraft on screen.
 async function prefetchRoutes() {
   const t = nowS(); if (t - routesAsked < 20) return; routesAsked = t;
@@ -995,7 +1014,8 @@ async function prefetchRoutes() {
 // a route to trust: the same guard the caption uses, so a wrong entry in the route table never turns up as a search result
 function routeOf(p) {
   const c = routes.get(p.callsign()), rt = c && c.route; if (!rt || !rt._airports) return null;
-  if (!p.ground && p.altFt < 6000) { const ap = rt._airports, a = ap[0], b = ap[ap.length - 1]; if (gcDist(a.lat, a.lon, p.rLat, p.rLon) > 120 && gcDist(b.lat, b.lon, p.rLat, p.rLon) > 120) return null; }
+  const ap = rt._airports, a = ap[0], b = ap[ap.length - 1]; if (!a || !b) return null;
+  if (!p.ground && p.altFt < 6000) { if (!isFinite(a.lat) || !isFinite(a.lon) || !isFinite(b.lat) || !isFinite(b.lon)) return null; if (gcDist(a.lat, a.lon, p.rLat, p.rLon) > 120 && gcDist(b.lat, b.lon, p.rLat, p.rLon) > 120) return null; }
   return rt;
 }
 function flightLabel(p) {
@@ -1012,7 +1032,7 @@ const TYPE_WORDS = { A318: 'a318', A319: 'a319', A320: 'a320', A321: 'a321', A19
 function typeWords(c) {
   if (!c) return ''; if (TYPE_WORDS[c]) return TYPE_WORDS[c];
   const m = /^B7(\d)\d$/.exec(c); if (m) return '7' + m[1] + '7 boeing';
-  if (/^B3[0-9A-Z]{2}$/.test(c)) return '737 max boeing';
+  if (/^B3[789X]M$/.test(c)) return '737 max boeing';
   return '';
 }
 function searchText(p) {
@@ -1020,20 +1040,20 @@ function searchText(p) {
   const rt = routeOf(p), info = p.info || {};
   const ends = rt ? [rt._airports[0], rt._airports[rt._airports.length - 1]].map((a) => [a.iata, a.icao, a.name, a.location].join(' ')).join(' ') : '';
   const kind = p.category === 'A7' ? 'helicopter rotorcraft' : '';
-  const h = [cs, ai ? ai[0] + cs.slice(3) : '', partner ? partner[0] + cs.slice(3) : '', airlineName(cs), partner ? partner[1] : '', p.reg, p.hex, p.type, typeWords(p.type), p.desc, info.long, info.type, kind, ends].join(' ').toLowerCase();
+  const h = [cs, ai ? ai[0] + cs.slice(3) : '', partner ? partner[0] + cs.slice(3) : '', airlineName(cs), partner ? partner[1] : '', p.reg, info.reg, p.hex, p.type, typeWords(p.type), p.desc, info.long, info.type, kind, ends].join(' ').toLowerCase();
   return h + ' ' + h.replace(/[- ]/g, '');   // also without dashes and spaces, so A320 finds A-320 and DL1234 finds DL 1234
 }
 function renderFind() {
   const q = $('find-q').value.trim().toLowerCase(), t = nowS(), ul = $('find-list'); ul.innerHTML = '';
   const live = [...planes.values()].filter((p) => p.lat !== null && p.fresh(t) && p.opacity > 0.05);
   findList = [];
-  if (!q) $('find-note').textContent = `Searching the ${live.length} aircraft on screen. Try an airline, a flight number, a tail number, a plane type such as 757, or an airport.`;
+  if (!q) $('find-note').textContent = `Searching the ${live.length} aircraft being tracked. Try an airline, a flight number, a tail number, a plane type such as 757, or an airport.`;
   else {
     const words = q.split(/\s+/);
     findList = live.filter((p) => { const h = searchText(p); return words.every((w) => h.indexOf(w) !== -1); });
     findList.sort((a, b) => gcDist(C.lat, C.lon, a.rLat, a.rLon) - gcDist(C.lat, C.lon, b.rLat, b.rLon));
     const n = findList.length; findList = findList.slice(0, 8);
-    $('find-note').textContent = n ? `${n} found${n > 8 ? ', the 8 nearest the center shown' : ''}. Origins and destinations are known for some flights only.` : 'Nothing matches. Only the aircraft on screen are searched, and origins and destinations are known for some flights only.';
+    $('find-note').textContent = n ? `${n} found${n > 8 ? ', the 8 nearest the center shown' : ''}. Origins and destinations are known for some flights only.` : 'Nothing matches. Only aircraft the page is tracking are searched, and origins and destinations are known for some flights only.';
   }
   findSel = clamp(findSel, 0, Math.max(findList.length - 1, 0));
   findList.forEach((p, i) => {
@@ -1042,20 +1062,21 @@ function renderFind() {
     const type = prettyType((p.info && p.info.long) || p.desc || '') || p.type || '';
     const route = rt ? placeName(rt._airports[0]) + ' to ' + placeName(rt._airports[rt._airports.length - 1]) : (/^[A-Z]{2,3}\d/.test(p.callsign()) ? 'route not known' : '');
     s.textContent = [type, p.ground ? 'on the ground' : fmtInt(Math.round(p.altFt / 25) * 25) + ' feet', route].filter(Boolean).join('  \u00b7  ');
-    li.appendChild(b); li.appendChild(s); if (i === findSel) li.className = 'sel';
-    li.onmouseenter = () => { findSel = i; for (const x of ul.children) x.className = ''; li.className = 'sel'; };
-    li.onclick = () => { closeFind(); lockOn(p); };
+    li.appendChild(b); li.appendChild(s); li.id = 'find-opt-' + i; li.setAttribute('role', 'option');
+    li.onmouseenter = () => markFound(i);
+    li.onclick = () => pickFound(p);
     ul.appendChild(li);
   });
+  markFound(findSel);
 }
 function findKey(e) {
   if (e.key === 'Escape') { e.preventDefault(); closeFind(); }
-  else if (e.key === 'ArrowDown') { e.preventDefault(); findSel = Math.min(findSel + 1, findList.length - 1); renderFind(); }
-  else if (e.key === 'ArrowUp') { e.preventDefault(); findSel = Math.max(findSel - 1, 0); renderFind(); }
-  else if (e.key === 'Enter') { e.preventDefault(); const p = findList[findSel]; if (p) { closeFind(); lockOn(p); } }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); markFound(Math.min(findSel + 1, findList.length - 1)); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); markFound(Math.max(findSel - 1, 0)); }
+  else if (e.key === 'Enter') { e.preventDefault(); pickFound(findList[findSel]); }
 }
 function togglePanel(on) {
-  const b = document.body; const next = on === undefined ? !b.classList.contains('panel') : on; b.classList.toggle('panel', next); if (next) b.classList.add('awake');
+  const b = document.body; const next = on === undefined ? !b.classList.contains('panel') : on; b.classList.toggle('panel', next); if (next) { b.classList.add('awake'); held.clear(); }
   // when the panel closes, take the keyboard back from whichever setting was last touched, so the space bar and the other keys work again
   if (!next && document.activeElement && document.activeElement !== document.body && document.activeElement.blur) document.activeElement.blur();
 }
