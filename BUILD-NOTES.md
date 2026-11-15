@@ -6,6 +6,17 @@ Written for whoever picks this up next, including a code reviewer. It records wh
 
 A self-contained 3D web page that shows live aircraft from a home Raspberry Pi ADS-B receiver (readsb and tar1090). Two editions are built from one source: the home edition (antenna only) and the network edition (antenna plus public flight networks, through the relay in relay/relay.py). The page is shared on the internet at skypuppy3d.com through a Cloudflare tunnel, so treat every viewer as untrusted.
 
+## Version 3.8 (November 15, 2026): satellite ground
+
+Chris asked for satellite ground, on the condition that it does not burden the Raspberry Pi. Branch v3.8-satellite, built on top of the 3.7.1 fixes.
+
+- A setting, "Satellite photos on the ground", off by default (S.sat; ?sat=1 for testing). When on, SatGround in src/scene.js lays photo tiles over the drawn ground around the spot the camera looks at: a fine level about six tiles across the view and a coarse level two zooms out covering three times as much, at most about 100 tiles wanted at once and 140 kept, 6 loading at a time, the nearest first. Tiles are 8 by 8 meshes projected like the rest of the ground, drawn over land and lakes and under shorelines, runways and the radius ring, with fog, and darkened with the drawn land at dusk and night.
+- The source is EOxCloudless 2025 (Sentinel-2 cloudless) from EOX's public WMTS, layer s2cloudless-2025_3857, matrix set g, https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g/{z}/{y}/{x}.jpg (?satApi= overrides it). EOX's non-commercial licence page says the layers are free for non-commercial use with legible attribution near the imagery, and that the service endpoints may be used directly in an application; no key or registration is mentioned. 2018 to 2025 layers are CC BY-NC-SA 4.0. The credit line at the bottom left names EOxCloudless 2025, EOX IT Services GmbH and "contains modified Copernicus Sentinel data 2025", with a link to cloudless.eox.at, and shows only while the photos are on. Commercial use would need EOX's paid licence. Google's photorealistic 3D tiles were not used because they need a key with billing.
+- Nothing goes through the relay or the Pi: the viewer's browser fetches the tiles. The README's "What leaves your network" lists it. The resolution is 10 m, so towns, rivers and airports read well from the usual heights but not single buildings.
+- If tiles fail, the drawn ground stays underneath. After 12 failures with none loaded, the page stops asking for five minutes and the setting's note says the photos are not loading.
+- Not yet confirmed: that EOX's tile server sends the CORS header WebGL needs. The page checks use a simulated tile server; the first real look is on Chris's Mac.
+- Four browser checks: off to start with nothing asked; on loads tiles and shows the credit; a far move loads the new place within the cache limit; off hides them; a dead service leaves the drawn map and stops asking.
+
 ## Version 3.7.1 (November 15, 2026): My places not kept, flight origins, calmer moves
 
 Chris reported that My places did not save, on the receiver's own (http) address. What was found:

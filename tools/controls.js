@@ -246,6 +246,30 @@ const { chromium } = require('playwright');
   });
   ok('moving the sky far away rises, fades while crossing, and comes down at the new place', jumped.jump && jumped.rose && jumped.maxFade >= 0.99 && !jumped.crossedSeen && jumped.arrived && jumped.clear, JSON.stringify(jumped));
   ok('a short move still glides without a fade', jumped.shortJump === false, JSON.stringify(jumped));
+  // ---------- version 3.8: satellite photos on the ground ----------
+  // off by default: no photo is asked for and no credit line shows
+  const satPage = await browser.newPage({ viewport: { width: 960, height: 540 } }); satPage.on('pageerror', (e) => errs.push('PAGEERROR (satellite): ' + e.message));
+  await satPage.goto(PAGE + '&satApi=/mock/sat/{z}/{y}/{x}.png'); await satPage.waitForTimeout(4000);
+  const satOff = await satPage.evaluate(() => ({ on: window.__sky.S.sat, asked: window.__sky.sat.asked, credit: !document.getElementById('satcredit').hidden }));
+  ok('satellite photos are off to start, and nothing is asked for', satOff.on === false && satOff.asked === 0 && !satOff.credit, JSON.stringify(satOff));
+  await satPage.keyboard.press('s'); await satPage.waitForTimeout(400); await satPage.click('#f-sat'); await satPage.keyboard.press('Escape'); await satPage.waitForTimeout(5000);
+  const satOn = await satPage.evaluate(() => { const s = window.__sky; return { on: s.S.sat, saved: JSON.parse(localStorage.getItem('sky3d') || '{}').sat, loaded: s.sat.loaded, shown: s.sat.shown(), cached: s.sat.cache.size, credit: !document.getElementById('satcredit').hidden, link: document.querySelector('#satcredit a').href }; });
+  ok('switched on, photos load around the view and the credit line shows', satOn.on && satOn.saved === true && satOn.loaded > 10 && satOn.shown > 10 && satOn.cached <= 140 && satOn.credit && /cloudless\.eox\.at/.test(satOn.link), JSON.stringify(satOn));
+  // moving the sky far away fetches photos for the new place too
+  const satMoved = await satPage.evaluate(async () => { const s = window.__sky, before = s.sat.loaded; s.S.center = 'KBOS'; s.applyCenter(); await new Promise((r) => setTimeout(r, 11000)); return { more: s.sat.loaded - before, shown: s.sat.shown(), cached: s.sat.cache.size }; });
+  ok('after moving to another place, photos load there, and old ones are let go', satMoved.more > 0 && satMoved.shown > 10 && satMoved.cached <= 140, JSON.stringify(satMoved));
+  await satPage.keyboard.press('s'); await satPage.waitForTimeout(400); await satPage.click('#f-sat'); await satPage.keyboard.press('Escape'); await satPage.waitForTimeout(800);
+  const satOff2 = await satPage.evaluate(() => ({ on: window.__sky.S.sat, visible: window.__sky.sat.group.visible, credit: !document.getElementById('satcredit').hidden }));
+  ok('switched off again, the photos and the credit line go away', !satOff2.on && !satOff2.visible && !satOff2.credit, JSON.stringify(satOff2));
+  await satPage.close();
+  // a photo service that does not answer: the drawn map stays, the page says so, and it stops asking for a while
+  const satBad = await browser.newPage({ viewport: { width: 960, height: 540 } }); satBad.on('pageerror', (e) => errs.push('PAGEERROR (satellite down): ' + e.message));
+  await satBad.goto(PAGE + '&sat=1&satApi=/mock/satfail/{z}/{y}/{x}.png'); await satBad.waitForTimeout(7000);
+  const down = await satBad.evaluate(() => { const s = window.__sky; return { down: s.sat.down, failed: s.sat.failed, asked: s.sat.asked, land: s.ground.land.geometry.index ? s.ground.land.geometry.index.count : 0, landShown: s.ground.land.visible, note: document.getElementById('sat-note').textContent }; });
+  await satBad.waitForTimeout(3000);
+  const later = await satBad.evaluate(() => window.__sky.sat.asked);
+  ok('when the photo service does not answer, the drawn map stays and the page stops asking', down.down && down.failed >= 12 && down.land > 0 && down.landShown && /not loading/.test(down.note) && later === down.asked, JSON.stringify(Object.assign(down, { later })));
+  await satBad.close();
   console.log('errors:', errs.join(' ; ') || 'none');
   await browser.close();
 })();
