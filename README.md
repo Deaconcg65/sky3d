@@ -2,6 +2,8 @@
 
 Live aircraft from a readsb or dump1090 receiver, drawn in three dimensions in a web browser. The camera glides from aircraft to aircraft, settles beside each one, then pulls back to the whole sky.
 
+New in version 3.7.1: press P for a small window with just your places; one click moves the sky there. Also fixed: a place added while the page was open in a second tab or window could be lost.
+
 New in version 3.7:
 
 - Watch list, both editions. In the settings, list up to 10 tail numbers or flight numbers (N2RF is there to start on your own screens). When one is seen, an alert line appears at the top of the page with Follow and Dismiss, with a short chime. The home edition alerts when your antenna hears one. The network edition also asks the flight networks about each one, through the relay, about every two minutes, so it alerts wherever in the world the aircraft is flying. A new alert for the same aircraft comes only after it has been out of sight for 20 minutes. On the secure (https) address you can also allow a browser notification for when the page is in the background. Alerts come only while a page is open.

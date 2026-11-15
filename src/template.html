@@ -52,11 +52,16 @@ body.awake #listen { opacity: 1; pointer-events: auto; } body.panel #listen { op
 body.awake #findbtn { opacity: 1; pointer-events: auto; } body.panel #findbtn { opacity: 0; pointer-events: none; }
 #findbtn:focus-visible { outline: 2px solid var(--lamp); outline-offset: 2px; }
 #pick { position: fixed; left: 0; top: 0; width: 56px; height: 56px; margin: -28px 0 0 -28px; border: 2px solid var(--lamp); border-radius: 50%; pointer-events: none; z-index: 3; box-shadow: 0 0 16px rgba(255,208,138,0.55); }
-#find { position: fixed; left: 50%; top: 4vh; max-height: 92vh; display: flex; flex-direction: column; transform: translateX(-50%); width: min(580px, 92vw); z-index: 7; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px;
+#find, #mine { position: fixed; left: 50%; top: 4vh; max-height: 92vh; display: flex; flex-direction: column; transform: translateX(-50%); width: min(580px, 92vw); z-index: 7; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px;
   -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
 #find input { width: 100%; font: 400 18px var(--face); color: var(--ink); background: rgba(255,255,255,0.06); border: 1px solid var(--line); border-radius: 8px; padding: 12px 13px; }
 #find input:focus-visible { outline: 2px solid var(--lamp); outline-offset: 1px; }
-#find-note { color: var(--faint); font-size: 13px; margin: 10px 2px 4px; line-height: 1.4; }
+#find-note, #mine-note { color: var(--faint); font-size: 13px; margin: 10px 2px 4px; line-height: 1.4; }
+#mine .mine-top { display: flex; align-items: center; gap: 8px; } #mine .mine-top b { flex: 1; font-weight: 500; font-size: 17px; }
+#mine button { font: 400 16px var(--face); color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 10px 13px; cursor: pointer; }
+#mine button:hover, #mine button:focus-visible { background: rgba(255,255,255,0.1); outline: none; }
+#mine-list { margin-top: 10px; overflow-y: auto; min-height: 0; } #mine-list button { display: block; width: 100%; text-align: left; margin: 0 0 6px; }
+#mine-close { font-size: 14px !important; color: var(--soft) !important; padding: 7px 12px !important; }
 #find ul { list-style: none; margin: 6px 0 0; padding: 0; overflow-y: auto; min-height: 0; }
 #find li { padding: 9px 11px; border-radius: 8px; cursor: pointer; } #find li.sel { background: rgba(255,255,255,0.1); }
 #find li b { font-weight: 500; font-size: 16px; white-space: pre; } #find li small { display: block; color: var(--soft); font-size: 13px; margin-top: 2px; }
@@ -121,6 +126,11 @@ body.shared #panel .home-only { display: none; }
   <input id="find-q" role="combobox" aria-expanded="true" aria-controls="find-list" aria-autocomplete="list" type="text" placeholder="Search: airline, flight, tail number, plane type, origin or destination" autocomplete="off" spellcheck="false" aria-label="Search flights">
   <div id="find-note" role="status"></div>
   <ul id="find-list" role="listbox" aria-label="Matching aircraft"></ul>
+</div>
+<div id="mine" hidden role="dialog" aria-label="My places">
+  <div class="mine-top"><b>My places</b><button id="mine-close" type="button">Close</button></div>
+  <div id="mine-list"></div>
+  <div id="mine-note"></div>
 </div>
 <div id="help" hidden role="dialog" aria-label="What the keys do"><div>
   <h1>What the keys do</h1>

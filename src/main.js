@@ -1086,7 +1086,7 @@ function initPanel() {
   $('f-pace').onchange = (e) => { S.pace = +e.target.value; save(); };
   $('f-click').value = String(S.clickSecs); $('f-click').onchange = (e) => { S.clickSecs = +e.target.value; save(); };
   $('f-flyback').value = String(S.flyBack); $('f-flyback').onchange = (e) => { S.flyBack = +e.target.value; save(); };
-  fillKeys(); $('help').onclick = () => toggleHelp(false);
+  fillKeys(); $('help').onclick = () => toggleHelp(false); $('mine-close').onclick = () => closeMine();
   $('findbtn').onclick = () => { $('findbtn').blur(); openFind(); };
   $('find-q').oninput = () => { findSel = 0; renderFind(); };
   canvasControls();
@@ -1134,6 +1134,7 @@ function initPanel() {
     const el = e.target, tag = el && el.tagName, typing = tag === 'INPUT' && el.type !== 'checkbox';
     if (e.key === 'Escape') { e.preventDefault(); escapeKey(); return; }   // Escape closes the topmost window first, wherever the keyboard focus is
     if (el && el.id === 'find-q') { findKey(e); return; }
+    if (!$('mine').hidden) { if ((e.key === 'p' || e.key === 'P') && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); closeMine(); } return; }   // with My places open, only P and Escape do anything; Enter and Space work its buttons
     if (typing) { if (e.key === 'Escape') togglePanel(false); return; }
     if (tag === 'SELECT' || tag === 'INPUT' || tag === 'BUTTON') { if (e.key === 's' || e.key === 'S' || e.key === 'Escape') { e.preventDefault(); togglePanel(e.key === 'Escape' ? false : undefined); } return; }
     if (e.ctrlKey || e.metaKey || e.altKey) return;   // leave the browser's own shortcuts alone
@@ -1155,13 +1156,14 @@ function initPanel() {
     else if (k === '-' || k === '_') zoomFly(1.25);
     else if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || (k === 'ArrowRight' && flying)) { e.preventDefault(); enterFly(); }
     else if (k === '/') { e.preventDefault(); openFind(); }
+    else if (k === 'p' || k === 'P') { e.preventDefault(); openMine(); }
     else if (k === 'l' || k === 'L') openListen();
     else if (k === 't' || k === 'T') { const TR = [0, 2, 5, 10]; S.trail = TR[(TR.indexOf(S.trail) + 1) % TR.length]; save(); $('f-trail').value = String(S.trail); }
     else if (k === 'c' || k === 'C') { S.captions = !S.captions; save(); $('f-cap').checked = S.captions; }
     else if (k === 's' || k === 'S' || k === 'Enter') togglePanel();
   });
   // which keys are down right now, for moving about in fly mode
-  window.addEventListener('keydown', (e) => { const tag = e.target && e.target.tagName; if (tag === 'INPUT' || tag === 'SELECT' || !$('help').hidden || !$('find').hidden || document.body.classList.contains('panel')) return; held.add(e.key); });
+  window.addEventListener('keydown', (e) => { const tag = e.target && e.target.tagName; if (tag === 'INPUT' || tag === 'SELECT' || !$('help').hidden || !$('find').hidden || !$('mine').hidden || document.body.classList.contains('panel')) return; held.add(e.key); });
   window.addEventListener('keyup', (e) => { held.delete(e.key); });
   window.addEventListener('blur', () => held.clear());
 }
@@ -1169,6 +1171,7 @@ function escapeKey() {
   const ae = document.activeElement; if (ae && ae !== document.body && ae.blur) ae.blur();   // give the keyboard back to the page, so the other keys work again
   if (!$('help').hidden) toggleHelp(false);
   else if (!$('find').hidden) closeFind();
+  else if (!$('mine').hidden) closeMine();
   else if (document.body.classList.contains('panel')) togglePanel(false);
   else if (shot.kind === 'fly' || shot.lock) leaveControls();
   else if (clicked) clickUntil = 0;
@@ -1196,6 +1199,7 @@ const HELP = [
   ['+ and -', 'Zoom in and out. The mouse wheel does too'],
   ['Click', 'Click an aircraft to see its details for a while'],
   ['Double click', 'Zoom in on an aircraft and stay with it'],
+  ['P', 'My places: pick one to move the sky there'],
   ['/', 'Search by airline, flight number, tail number, plane type, origin or destination'],
   ['Space bar', 'Hold on this aircraft, or move on'],
   ['Right arrow', 'Go to another aircraft, when not flying'],
@@ -1213,7 +1217,22 @@ function fillKeys() {
     for (const [k, v] of HELP) { const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = k; dd.textContent = v; dl.appendChild(dt); dl.appendChild(dd); }
   }
 }
-function toggleHelp(on) { const h = $('help'), open = on === undefined ? h.hidden : on; h.hidden = !open; if (open) { held.clear(); closeFind(); document.body.classList.add('awake'); } }
+function toggleHelp(on) { const h = $('help'), open = on === undefined ? h.hidden : on; h.hidden = !open; if (open) { held.clear(); closeFind(); closeMine(); document.body.classList.add('awake'); } }
+// Version 3.7.1: P opens a small window with just the viewer's places, the same list as "Center the sky on". One click moves the sky there.
+function openMine() {
+  toggleHelp(false); closeFind(); document.body.classList.remove('panel'); held.clear(); document.body.classList.add('awake');
+  const box = $('mine-list'); box.innerHTML = ''; const list = placeList(), cur = /^P\d+$/.test(S.center) ? +S.center.slice(1) : -1;
+  list.forEach((pl, i) => {
+    const b = document.createElement('button'); b.type = 'button';
+    b.textContent = pl.n + (i === cur ? '  (here now)' : ''); b.setAttribute('aria-label', 'Go to ' + pl.n);
+    b.onclick = () => { closeMine(); S.center = 'P' + i; save(); buildCenterOptions(); applyCenter(); };
+    box.appendChild(b);
+  });
+  $('mine-note').textContent = list.length ? 'Click one to move the sky there. P or Escape closes this.' : 'No places yet. Press S, then add one under My places or with Find a place.';
+  $('mine').hidden = false;
+  const first = box.querySelector('button') || $('mine-close'); first.focus();
+}
+function closeMine() { const m = $('mine'); if (m.hidden) return; m.hidden = true; const ae = document.activeElement; if (ae && m.contains(ae) && ae.blur) ae.blur(); }
 let findSel = 0, findList = [], routesAsked = -1e9, findTimer = 0;
 function openFind() {
   toggleHelp(false); document.body.classList.remove('panel'); held.clear(); $('find').hidden = false; clearInterval(findTimer); findTimer = setInterval(() => { if (!$('find').hidden) renderFind(); }, 2000); $('find-q').value = ''; findSel = 0; renderFind(); $('find-q').focus();
@@ -1319,7 +1338,7 @@ function findKey(e) {
   else if (e.key === 'Enter') { e.preventDefault(); pickFound(findList[findSel]); }
 }
 function togglePanel(on) {
-  const b = document.body; const next = on === undefined ? !b.classList.contains('panel') : on; b.classList.toggle('panel', next); if (next) { b.classList.add('awake'); held.clear(); }
+  const b = document.body; const next = on === undefined ? !b.classList.contains('panel') : on; b.classList.toggle('panel', next); if (next) { b.classList.add('awake'); held.clear(); closeMine(); }
   // when the panel closes, take the keyboard back from whichever setting was last touched, so the space bar and the other keys work again
   if (!next && document.activeElement && document.activeElement !== document.body && document.activeElement.blur) document.activeElement.blur();
 }
@@ -1374,7 +1393,7 @@ if (S.follow) setFollow(S.follow);
 if (!MANUAL) { poll(); setInterval(followTick, 1000); setInterval(watchTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
   net, NET: __NET__ };

@@ -11,6 +11,7 @@ A self-contained 3D web page that shows live aircraft from a home Raspberry Pi A
 Chris reported that My places did not save, on the receiver's own (http) address. What was found:
 
 - A real bug: every copy of the page open in the same browser (two tabs, or a window left open from before an update) holds all settings in memory and saves all of them at once. A copy opened earlier wrote its old list of places over a place just added in another copy the next time any setting changed, even pressing C or T. Fixed: each copy listens for the browser's storage event and takes in the places and watch list another copy saved, staying centered on the same place. Two browser checks in tools/controls.js cover it (the second copy's place shows in the first, and both are there after reopening).
+- Added at Chris's request: the P key opens a small window with just My places (the same list as "Center the sky on"). One click moves the sky there and closes it. P again or Escape closes it, and while it is open the other keys, the arrow keys included, do nothing, as with the other windows. It is in the help window (H) and the README. Three browser checks cover it.
 - By design, not a bug: places live in one browser on one device, and browsers keep them separately for each address. A place added at http://<receiver>/sky/ on the Mac is not on the TV, the phone, or the same page reached by another name or port (an IP address, a .local name, or the relay's port 8099). On the shared https address they are kept only with "Keep my places" ticked.
 
 ## Done in 3.7
