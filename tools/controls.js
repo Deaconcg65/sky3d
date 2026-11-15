@@ -201,7 +201,7 @@ const { chromium } = require('playwright');
   const kept = await tab2.evaluate(() => ({ keep: window.__sky.S.keep, places: window.__sky.S.places.map((p) => p.n), stored: (JSON.parse(localStorage.getItem('sky3d') || '{}').places || []).map((p) => p.n), ticked: document.getElementById('f-keep').checked }));
   ok('My places are still there after the page is opened again, here at the receiver\'s own address', kept.keep === true && kept.ticked && kept.places.includes('My House') && kept.places.includes('Fairfield') && kept.stored.includes('My House'), JSON.stringify(kept));
   // removing a watched aircraft in the other copy clears its alert here too, so adding it back alerts again
-  const wsync = await page.evaluate(async () => { const s = window.__sky; s.S.watch = ['N2RF', 'N7XX']; s.watchState.set('N7XX', { seenAt: performance.now() / 1000, where: null, asked: 0, netOk: true, alerted: true }); s.dismissWatch('N7XX'); return true; });
+  const wsync = await page.evaluate(async () => { const s = window.__sky; s.S.watch = ['N2RF', 'N7XX']; s.watchState.set('N7XX', { seenAt: performance.now() / 1000, where: null, asked: 0, netOk: true, alerted: true }); s.dismissWatch('N7XX'); const o = JSON.parse(localStorage.getItem('sky3d') || '{}'); o.watch = ['N2RF', 'N7XX']; localStorage.setItem('sky3d', JSON.stringify(o)); return true; });   // stored too, so the other copy's write below is a real change and the browser tells this copy
   await tab2.evaluate(() => { const o = JSON.parse(localStorage.getItem('sky3d')); o.watch = ['N2RF']; localStorage.setItem('sky3d', JSON.stringify(o)); });
   await page.waitForTimeout(400);
   const wafter = await page.evaluate(() => ({ list: window.__sky.S.watch, state: window.__sky.watchState.has('N7XX'), row: !!document.querySelector('#watch .w-row[data-key="N7XX"]') }));
@@ -258,6 +258,7 @@ const { chromium } = require('playwright');
   const jumped = await page.evaluate(async () => {
     const s = window.__sky, wait = (ms) => new Promise((r) => setTimeout(r, ms)), sky = document.getElementById('sky');
     s.S.center = 'KJFK'; s.applyCenter(); await wait(9000);
+    s.S.center = 'KLGA'; s.applyCenter(); const shortJump = s.shot.jump; await wait(8000);   // Kennedy to LaGuardia is about 17 km
     s.S.center = 'KLAX'; s.applyCenter(); const jump = s.shot.jump, d0 = s.pose.dist, start = { lat: s.pose.lat, lon: s.pose.lon };
     let maxFade = 0, maxDist = 0, crossedSeen = false, early = false;
     for (let i = 0; i < 50; i++) {
@@ -267,7 +268,6 @@ const { chromium } = require('playwright');
       if (maxFade < 0.99 && Math.abs(s.pose.lat - 33.94) < 0.6) early = true;   // at the new place before the view had faded
     }
     const end = { lat: s.pose.lat, fade: +getComputedStyle(document.getElementById('jump')).opacity };
-    s.S.center = 'KLGA'; s.applyCenter(); const shortJump = s.shot.jump;
     return { jump, rose: maxDist > d0 * 2, maxFade, crossedSeen, early, arrived: Math.abs(end.lat - 33.94) < 0.6, clear: end.fade === 0, shortJump, sky: !!sky };
   });
   ok('moving the sky far away rises, fades while crossing, and comes down at the new place', jumped.jump && jumped.rose && jumped.maxFade >= 0.99 && !jumped.crossedSeen && !jumped.early && jumped.arrived && jumped.clear, JSON.stringify(jumped));
