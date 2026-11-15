@@ -88,6 +88,17 @@ const { chromium } = require('playwright');
   const k5 = await page.evaluate(() => ({ kind: window.__sky.shot.kind, lock: window.__sky.shot.lock, plane: window.__sky.shot.plane && window.__sky.shot.plane.callsign() }));
   ok('a new Follow releases a locked aircraft', !two[2] && k5.kind === 'follow' && k5.plane === two[1], JSON.stringify({ two, k5 }));
   await page.evaluate(() => window.__sky.setFollow(''));
+  // while following, a click then N or W must not leave the followed flight without its caption (Codex review of 4a15953)
+  await page.waitForTimeout(2000);
+  const cap = await page.evaluate(() => { const s = window.__sky; const ps = [...s.planes.values()].filter((q) => q.lat !== null && q.opacity > 0.5 && q.callsign() && !q.remote); s.setFollow(ps[0].callsign()); return [ps[0].callsign(), ps[1].callsign()]; });
+  await page.waitForTimeout(16000);
+  for (const key of ['n', 'w']) {
+    await page.evaluate((cs) => { const s = window.__sky; const p = [...s.planes.values()].find((q) => q.callsign() === cs); const v = p.pos.clone().project(s.camera); s.clickAt((v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight); }, cap[1]);
+    await page.waitForTimeout(300); await page.keyboard.press(key); await page.waitForTimeout(800);
+    const c = await page.evaluate(() => ({ kind: window.__sky.shot.kind, clicked: !!window.__sky.clicked, flight: document.getElementById('c-flight').textContent }));
+    ok('following: click then ' + key.toUpperCase() + ' puts the followed caption back', c.kind === 'follow' && !c.clicked && c.flight.replace(/\s/g, '').indexOf(cap[0].slice(3)) !== -1, JSON.stringify(c));
+  }
+  await page.evaluate(() => window.__sky.setFollow(''));
   console.log('errors:', errs.join(' ; ') || 'none');
   await browser.close();
 })();

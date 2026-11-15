@@ -904,11 +904,12 @@ function initPanel() {
     if (document.body.classList.contains('panel')) { if (k === 's' || k === 'S') togglePanel(); return; }   // with the settings open, only S and Escape do anything
     if (!$('find').hidden) return;
     if (e.repeat && !flying && (k === 'f' || k.indexOf('Arrow') === 0)) return;   // a key held down from before Escape must not take the controls again
-    const nextAircraft = () => { clicked = null; clickUntil = 0; paused = false; const p = pickNext(); if (p && !followOwns()) startVisit(p); };
+    // clicked details are ended by clickUntil = 0, so updateCaption puts the current shot's caption back even when Follow keeps the camera
+    const nextAircraft = () => { clickUntil = 0; paused = false; const p = pickNext(); if (p && !followOwns()) startVisit(p); };
     if (k === ' ') { paused = !paused; e.preventDefault(); }
     else if (k === 'n' || (k === 'ArrowRight' && !flying)) nextAircraft();
     else if (k === 'a' || k === 'A') autoTour();
-    else if (k === 'w' || k === 'W') { clicked = null; clickUntil = 0; paused = false; if (!followOwns() || flying || shot.lock) goWide(); }
+    else if (k === 'w' || k === 'W') { clickUntil = 0; paused = false; if (!followOwns() || flying || shot.lock) goWide(); }
     else if (k === 'f') enterFly();
     else if (k === 'F') { if (document.fullscreenElement) document.exitFullscreen(); else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {}); }
     else if (k === '+' || k === '=') zoomFly(0.8);

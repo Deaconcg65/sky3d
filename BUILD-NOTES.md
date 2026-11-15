@@ -16,6 +16,7 @@ A self-contained 3D web page that shows live aircraft from a home Raspberry Pi A
 - Review fixes from Codex (commit 11155c8): fly mode direction, A with Follow, keyboard ownership while windows are open, stale search picks, scrolling search on short screens, on-screen-only clicks, database tail numbers, the 737 MAX alias, one request per database shard, screen reader support for results, a guard for incomplete route entries.
 - Second Codex review (on GitHub, of commit 05b5935): after A pauses Follow, W and N or right arrow work again for the tour, and Escape or the fly timeout clears a Space hold so the tour moves on. One helper, followOwns(), now decides whether Follow has the camera; the network area lookup uses it too, so a paused Follow no longer pulls the network question toward the followed flight. Two checks were added to tools/controls.js for these.
 - Third Codex review (of commit 4b6cb9d): a flight submitted in Settings, Follow, now takes the camera from a locked aircraft or fly mode; before, a lock kept the camera as long as the locked aircraft stayed in reach. A check was added to tools/controls.js.
+- Fourth Codex review (of commit 4a15953): while following a flight, clicking another aircraft and then pressing N, right arrow or W no longer leaves the followed flight without its caption. Those keys now end the clicked details the same way their timer does. A check was added to tools/controls.js.
 
 ## Left to do, in order
 
