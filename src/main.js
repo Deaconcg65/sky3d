@@ -55,7 +55,7 @@ window.addEventListener('storage', (e) => {
   if (e.key !== 'sky3d' || !e.newValue) return;
   let o; try { o = JSON.parse(e.newValue); } catch (err) { return; }
   if (!o || typeof o !== 'object') return;
-  if (typeof o.keep === 'boolean' && o.keep !== S.keep && !Q.has('keep')) { S.keep = o.keep; $('f-keep').checked = S.keep; }
+  if (typeof o.keep === 'boolean' && o.keep !== S.keep && !Q.has('keep')) { S.keep = o.keep; $('f-keep').checked = S.keep; keepNotes(); }
   if (S.keep && Array.isArray(o.places)) {
     const fine = o.places.filter((pl) => pl && typeof pl.n === 'string' && Number.isFinite(pl.lat) && Number.isFinite(pl.lon)).slice(0, 20);
     const was = /^P\d+$/.test(S.center) ? placeList()[+S.center.slice(1)] : null;
@@ -1053,13 +1053,33 @@ function renderPlaces() {
   });
 }
 function addPlace() {
-  const ll = parseLatLon($('f-pll').value), note = $('places-note'), name = $('f-pname').value.trim().slice(0, 28) || 'My place';
-  if (!ll) { note.textContent = 'I could not read that as a latitude and longitude. It should look like 40.6892, -74.0445'; return; }
-  if (placeList().length >= 20) { note.textContent = 'That is the limit of 20 places. Remove one first.'; return; }
-  S.places = placeList().concat([{ n: name, lat: ll.lat, lon: ll.lon }]); save();
-  $('f-pname').value = ''; $('f-pll').value = ''; note.textContent = name + (S.keep ? ' added. It is kept on this device only.' : ' added. It will be forgotten when you close this page.');
+  const note = $('places-note'), typedName = $('f-pname').value.trim().slice(0, 28);
+  let where = $('f-pll').value.trim(), name = typedName;
+  // Version 3.7.1: the second box takes an address, a city or a zip code as well as a latitude and longitude. Anything that is
+  // not a latitude and longitude is looked up the way Find a place does, and the answers are shown under the box to pick from.
+  // Someone who types an address in the name box and leaves the second box empty gets it looked up too.
+  if (!where && typedName) { where = typedName; name = ''; }
+  if (!where) { note.textContent = 'Type an address, a city or a latitude and longitude in the second box.'; return; }
+  const ll = parseLatLon(where);
+  if (!ll) { lookPlace(MINE, where, name); return; }
+  addMine(name || 'My place', ll.lat, ll.lon);
+}
+function addMine(name, lat, lon) {
+  const note = $('places-note'), list = placeList(), at = list.findIndex((pl) => Math.abs(pl.lat - lat) < 0.0005 && Math.abs(pl.lon - lon) < 0.0005);
+  if (at !== -1) { note.textContent = 'That place is already in My places as ' + list[at].n + '.'; return; }
+  if (list.length >= 20) { note.textContent = 'That is the limit of 20 places. Remove one first.'; return; }
+  S.places = list.concat([{ n: name.slice(0, 28), lat: +(+lat).toFixed(5), lon: +(+lon).toFixed(5) }]); save();
+  $('f-pname').value = ''; $('f-pll').value = ''; $('pll-list').innerHTML = ''; mineAdded = name.slice(0, 28); note.textContent = mineNote();
   buildCenterOptions(); renderPlaces(); rebuildLabels();
 }
+// The notes that say how long a place is kept are written again when Keep my places changes, so they never disagree with the box.
+let mineAdded = '', lookAdded = '';
+const mineNote = () => mineAdded + (S.keep ? ' added. It is kept on this device only.' : ' added. It will be forgotten when you close this page.');
+function keepNotes() {   // a note left from before the box changed is written again to match it
+  if (lookAdded && $('look-note').textContent.indexOf(lookAdded + ' is in My places') === 0) $('look-note').textContent = lookNote();
+  if (mineAdded && $('places-note').textContent.indexOf(mineAdded + ' added.') === 0) $('places-note').textContent = mineNote();
+}
+const lookNote = () => lookAdded + (S.keep ? ' is in My places, kept on this device only.' : ' is in My places until you close this page.');
 // ---------- finding a typed place (version 3.7) ----------
 // An airport code is found in the airport list on this page. In the network edition anything else is looked up through the
 // relay on the receiver, which asks the OpenStreetMap place finder: only the typed words are sent, only when the viewer
@@ -1067,7 +1087,6 @@ function addPlace() {
 // The home edition has no relay, so it searches the airport list by code, name or city only. A place picked from the
 // results joins My places, with the same rules for keeping it on this device.
 const placeCache = new Map();
-let lookSeq = 0;
 const placeApi = () => (__NET__ ? (Q.get('placeApi') || (relayBase() ? relayBase() + '/place/' : '')) : '');
 function airportsMatching(text) {
   const words = text.toLowerCase().split(' ').filter(Boolean);
@@ -1075,14 +1094,16 @@ function airportsMatching(text) {
     .sort((x, y) => (y[7] || 0) - (x[7] || 0)).slice(0, 5)
     .map((a) => ({ name: a[2], sub: [a[3], a[1] || a[0]].filter(Boolean).join(', '), lat: a[4], lon: a[5], code: a[0] }));
 }
-async function lookPlace() {
-  const text = $('f-lookq').value.replace(/\s+/g, ' ').trim().slice(0, 100), note = $('look-note'), seq = ++lookSeq, up = text.toUpperCase();
-  const show = (list, msg) => { if (seq === lookSeq) { showLook(list); note.textContent = msg; } };
+const LOOK = { list: 'look-list', note: 'look-note', seq: 0 }, MINE = { list: 'pll-list', note: 'places-note', seq: 0, mine: true };
+async function lookPlace(at = LOOK, typed, name = '') {
+  const text = String(typed == null ? $('f-lookq').value : typed).replace(/\s+/g, ' ').trim().slice(0, 100), note = $(at.note), seq = ++at.seq, up = text.toUpperCase();
+  const show = (list, msg) => { if (seq === at.seq) { showLook(list, at, name); note.textContent = msg; } };
+  const pick = at.mine ? 'Pick the right one to add it to My places' + (name ? ' as ' + name : '') + '.' : 'Pick one to center the sky there. It joins My places.';
   if (text.length < 2) return show([], 'Type at least two letters.');
   const a = /^[A-Z0-9]{3,4}$/.test(up) ? AP[up] || AP['K' + up] : null;
-  if (a) return show([{ name: a[2], sub: [a[3], a[1] || a[0]].filter(Boolean).join(', '), lat: a[4], lon: a[5], code: a[0] }], 'An airport on this page.');
+  if (a) return show([{ name: a[2], sub: [a[3], a[1] || a[0]].filter(Boolean).join(', '), lat: a[4], lon: a[5], code: a[0] }], at.mine ? pick : 'An airport on this page.');
   const api = placeApi();
-  if (!api) { const list = airportsMatching(text); return show(list, list.length ? 'Airports on this page that match.' : __NET__ ? 'No airport on this page matches, and this copy has no relay to look up other places.' : 'No airport on this page matches. Try an airport code, or paste a latitude and longitude below.'); }
+  if (!api) { const list = airportsMatching(text); return show(list, list.length ? (at.mine ? 'Airports on this page that match. ' + pick : 'Airports on this page that match.') : __NET__ ? 'No airport on this page matches, and this copy has no relay to look up other places. A latitude and longitude always works.' : 'No airport on this page matches. This copy can only look up airports, so paste a latitude and longitude from Google Maps instead.'); }
   if (encodeURIComponent(text).length > 270) return show([], 'That is too long to look up. Try fewer words.');
   const key = text.toLowerCase(); let found = placeCache.get(key);
   if (!found) {
@@ -1093,17 +1114,19 @@ async function lookPlace() {
         .map((p) => { const parts = p.name.split(',').map((x) => x.trim()).filter(Boolean); return { name: parts[0] || p.name.trim(), sub: parts.slice(1).join(', '), lat: +p.lat, lon: +p.lon }; });
       if (placeCache.size > 100) placeCache.clear();
       placeCache.set(key, found);
-    } catch (e) { return show([], e && e.message === '503' ? 'The place finder is busy. Try again in a moment.' : 'The place finder did not answer. Try again later, or paste a latitude and longitude below.'); }
+    } catch (e) { return show([], e && e.message === '503' ? 'The place finder is busy. Try again in a moment.' : 'The place finder did not answer. Try again later, or paste a latitude and longitude.'); }
   }
-  show(found, found.length ? 'Pick one to center the sky there. It joins My places.' : 'Nothing found for that. Try adding a state or a country.');
+  show(found, found.length ? pick : 'Nothing found for that. Try adding a state or a country, or paste a latitude and longitude.');
 }
-function showLook(list) {
-  const box = $('look-list'); box.innerHTML = '';
+function showLook(list, at = LOOK, name = '') {
+  const box = $(at.list); box.innerHTML = '';
   list.forEach((item) => {
     const row = document.createElement('div'); row.className = 'place';
-    const name = document.createElement('span'); name.textContent = item.name; const sub = document.createElement('small'); sub.textContent = item.sub || item.lat.toFixed(4) + ', ' + item.lon.toFixed(4);
-    const go = document.createElement('button'); go.type = 'button'; go.className = 'quiet'; go.textContent = 'Go there'; go.setAttribute('aria-label', 'Go to ' + item.name); go.onclick = () => goPlace(item);
-    name.appendChild(sub); row.appendChild(name); row.appendChild(go); box.appendChild(row);
+    const label = document.createElement('span'); label.textContent = item.name; const sub = document.createElement('small'); sub.textContent = item.sub || item.lat.toFixed(4) + ', ' + item.lon.toFixed(4);
+    const go = document.createElement('button'); go.type = 'button'; go.className = 'quiet';
+    if (at.mine) { go.textContent = 'Add'; go.setAttribute('aria-label', 'Add ' + item.name + ' to My places'); go.onclick = () => addMine(name || item.name, item.lat, item.lon); }
+    else { go.textContent = 'Go there'; go.setAttribute('aria-label', 'Go to ' + item.name); go.onclick = () => goPlace(item); }
+    label.appendChild(sub); row.appendChild(label); row.appendChild(go); box.appendChild(row);
   });
 }
 function goPlace(item) {
@@ -1118,7 +1141,7 @@ function goPlace(item) {
       S.places = list.concat([{ n: item.name.slice(0, 28), lat: +item.lat.toFixed(5), lon: +item.lon.toFixed(5) }]); i = S.places.length - 1;
     }
     S.center = 'P' + i;
-    note.textContent = item.name + (S.keep ? ' is in My places, kept on this device only.' : ' is in My places until you close this page.');
+    lookAdded = item.name; note.textContent = lookNote();
   }
   save(); $('look-list').innerHTML = ''; $('f-lookq').value = ''; buildCenterOptions(); renderPlaces(); applyCenter();
 }
@@ -1162,7 +1185,7 @@ function initPanel() {
   $('f-trail').onchange = (e) => { S.trail = +e.target.value; save(); };
   renderPlaces(); $('f-places').onsubmit = (e) => { e.preventDefault(); addPlace(); };
   $('f-look').onsubmit = (e) => { e.preventDefault(); lookPlace(); };   // only on Enter or Find, never as the viewer types
-  $('f-keep').checked = !!S.keep; $('f-keep').onchange = (e) => { S.keep = e.target.checked; save(); $('places-note').textContent = S.keep ? 'Your places will be kept on this device.' : 'Your places are no longer kept. They will be forgotten when you close this page.'; };
+  $('f-keep').checked = !!S.keep; $('f-keep').onchange = (e) => { S.keep = e.target.checked; save(); keepNotes(); $('places-note').textContent = S.keep ? 'Your places will be kept on this device.' : 'Your places are no longer kept. They will be forgotten when you close this page.'; };
   if (SHARED) {   // a guest is not looking at an antenna of their own, and has no relay to point at
     document.body.classList.add('shared');
     if (__NET__) { const o = $('f-src').options; o[0].textContent = "This site's antenna and the flight network"; o[1].textContent = "This site's antenna only"; }
