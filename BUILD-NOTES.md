@@ -6,6 +6,13 @@ Written for whoever picks this up next, including a code reviewer. It records wh
 
 A self-contained 3D web page that shows live aircraft from a home Raspberry Pi ADS-B receiver (readsb and tar1090). Two editions are built from one source: the home edition (antenna only) and the network edition (antenna plus public flight networks, through the relay in relay/relay.py). The page is shared on the internet at skypuppy3d.com through a Cloudflare tunnel, so treat every viewer as untrusted.
 
+## Version 3.7.1 (November 15, 2026): My places not kept
+
+Chris reported that My places did not save, on the receiver's own (http) address. What was found:
+
+- A real bug: every copy of the page open in the same browser (two tabs, or a window left open from before an update) holds all settings in memory and saves all of them at once. A copy opened earlier wrote its old list of places over a place just added in another copy the next time any setting changed, even pressing C or T. Fixed: each copy listens for the browser's storage event and takes in the places and watch list another copy saved, staying centered on the same place. Two browser checks in tools/controls.js cover it (the second copy's place shows in the first, and both are there after reopening).
+- By design, not a bug: places live in one browser on one device, and browsers keep them separately for each address. A place added at http://<receiver>/sky/ on the Mac is not on the TV, the phone, or the same page reached by another name or port (an IP address, a .local name, or the relay's port 8099). On the shared https address they are kept only with "Keep my places" ticked.
+
 ## Done in 3.7
 
 - Watch list (both editions). Settings hold up to 10 tail numbers or flight numbers, kept on the device like Follow. N2RF is on the list to start on the receiver's own screens (plain http address); guests on the shared https address start with an empty list. Every second the page looks for each one among the aircraft it is tracking. In the network edition it also asks the flight networks through the relay, one entry at a time: a flight number with an airline code (DAL2210) as a callsign, anything else as a registration. One question at most every 15 seconds, so each entry is asked about every two minutes with one entry and every 150 seconds with ten, and never while the page is already tracking it (seen in the last 30 seconds). With no relay beside the page, nothing is asked.

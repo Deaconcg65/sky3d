@@ -48,6 +48,27 @@ const save = () => {
     localStorage.setItem('sky3d', JSON.stringify(out));
   } catch (e) { /* ignore */ }
 };
+// Version 3.7.1: every copy of this page open in the same browser (another tab or window) keeps its own settings in memory and
+// saves all of them at once, so a copy opened earlier used to write its old list of places over a place just added in another
+// one. Each copy now takes in what another copy saved to the lists that grow, My places and the watch list, as it happens.
+window.addEventListener('storage', (e) => {
+  if (e.key !== 'sky3d' || !e.newValue) return;
+  let o; try { o = JSON.parse(e.newValue); } catch (err) { return; }
+  if (!o || typeof o !== 'object') return;
+  if (typeof o.keep === 'boolean' && o.keep !== S.keep && !Q.has('keep')) { S.keep = o.keep; $('f-keep').checked = S.keep; }
+  if (S.keep && Array.isArray(o.places)) {
+    const fine = o.places.filter((pl) => pl && typeof pl.n === 'string' && Number.isFinite(pl.lat) && Number.isFinite(pl.lon)).slice(0, 20);
+    const was = /^P\d+$/.test(S.center) ? placeList()[+S.center.slice(1)] : null;
+    S.places = fine;
+    if (was) {   // stay on the same place here, wherever it now sits in the list; if the other copy removed it, go back to the start
+      const i = fine.findIndex((pl) => pl.n === was.n && Math.abs(pl.lat - was.lat) < 1e-6 && Math.abs(pl.lon - was.lon) < 1e-6);
+      S.center = i === -1 ? DEFAULTS.center : 'P' + i;
+      if (i === -1) applyCenter();
+    }
+    buildCenterOptions(); renderPlaces(); rebuildLabels();
+  }
+  if (Array.isArray(o.watch)) { S.watch = [...new Set(o.watch.map(watchKey).filter(Boolean))].slice(0, WATCH_MAX); renderWatch(); }
+});
 let home = null;   // receiver position, if the receiver has one set
 // Reads a latitude and longitude as copied from Google Maps (40.6892, -74.0445) or Google Earth (40°41'21"N 74°02'40"W).
 function parseLatLon(text) {
