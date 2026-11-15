@@ -265,20 +265,22 @@ export class SatGround {
   // lat, lon: the spot the camera looks at; spanKm: about how much ground is in view around it; now: seconds
   update(lat, lon, spanKm, now) {
     if (!this.on) return;
-    if (this.down && performance.now() / 1000 > this.downUntil) { this.down = false; this.failed = 0; for (const [k, t] of this.cache) if (t.bad) this.cache.delete(k); }
+    if (this.down && performance.now() / 1000 > this.downUntil) { this.down = false; this.failed = 0; this.key = ''; for (const [k, t] of this.cache) if (t.bad) this.cache.delete(k); }   // try again, even if the view has not moved
     const wide = Math.max(Math.cos(lat * D2R), 0.2) * 40075;
     const zf = clamp(Math.floor(Math.log2(wide / (spanKm / 6))), 4, 13), zc = Math.max(zf - 2, 2);
-    const levels = [[zf, spanKm, 2.6], [zc, spanKm * 3, 2.5]];
-    const key = levels.map(([z, span]) => z + ':' + Math.floor(lonTile(lon, z) * 4) + ':' + Math.floor(latTile(lat, z) * 4)).join('/') + ':' + proj.epoch;
+    // each level: its zoom, the tile under the spot, how many tiles out from it, and its draw order (fine over coarse)
+    const levels = [[zf, spanKm, 2.6], [zc, spanKm * 3, 2.5]].map(([z, span, order]) => ({ z, order, cx: lonTile(lon, z), cy: latTile(lat, z), r: Math.ceil(span / 2 / (wide / 2 ** z)) }));
+    const key = levels.map((L) => L.z + ':' + Math.floor(L.cx * 4) + ':' + Math.floor(L.cy * 4) + ':' + L.r).join('/') + ':' + proj.epoch;
     if (key === this.key) return; this.key = key;
     const want = new Set(); this.want = want; this.queue.length = 0;
-    for (const [z, span, order] of levels) {
-      const n = 2 ** z, cx = lonTile(lon, z), cy = latTile(lat, z), tileKm = wide / n, r = Math.ceil(span / 2 / tileKm);
+    for (const { z, order, cx, cy, r } of levels) {
+      const n = 2 ** z;
       for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
         const x = (((Math.floor(cx) + dx) % n) + n) % n, y = Math.floor(cy) + dy; if (y < 0 || y >= n) continue;
         const k = z + '/' + x + '/' + y; want.add(k);
         let t = this.cache.get(k);
         if (!t) { t = { z, x, y, k, order, mesh: null, bad: false, loading: false, ep: -1, used: now }; this.cache.set(k, t); }
+        t.order = order; if (t.mesh) t.mesh.renderOrder = order;   // a tile can be the fine level one moment and the coarse one the next
         t.used = now; t.d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy) + (z === zc ? -0.5 : 0);   // the coarse level comes first, so the whole view fills in quickly
         if (t.mesh) { if (t.ep !== proj.epoch) this.place(t); }
         else if (!t.bad && !t.loading && !this.down) this.queue.push(t);

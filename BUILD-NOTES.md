@@ -15,7 +15,7 @@ Chris asked for satellite ground, on the condition that it does not burden the R
 - Nothing goes through the relay or the Pi: the viewer's browser fetches the tiles. The README's "What leaves your network" lists it. The resolution is 10 m, so towns, rivers and airports read well from the usual heights but not single buildings.
 - If tiles fail, the drawn ground stays underneath. After 12 failures with none loaded, the page stops asking for five minutes and the setting's note says the photos are not loading.
 - Not yet confirmed: that EOX's tile server sends the CORS header WebGL needs. The page checks use a simulated tile server; the first real look is on Chris's Mac.
-- Five browser checks: off to start with nothing asked; on loads tiles and shows the credit; a far move loads the new place within the cache limit; off hides them; a dead service leaves the drawn map and stops asking.
+- Seven browser checks: off to start with nothing asked; on loads tiles and shows the credit; zooming out widens the ring; a far move loads the new place within the cache limit; off hides them; a dead service leaves the drawn map and stops asking; after the pause it asks again on its own.
 
 ## Version 3.7.1 (November 15, 2026): My places not kept, flight origins, calmer moves
 

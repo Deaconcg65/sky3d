@@ -256,6 +256,9 @@ const { chromium } = require('playwright');
   await satPage.keyboard.press('s'); await satPage.waitForTimeout(400); await satPage.click('#f-sat'); await satPage.keyboard.press('Escape'); await satPage.waitForTimeout(5000);
   const satOn = await satPage.evaluate(() => { const s = window.__sky; return { on: s.S.sat, saved: JSON.parse(localStorage.getItem('sky3d') || '{}').sat, loaded: s.sat.loaded, shown: s.sat.shown(), cached: s.sat.cache.size, credit: !document.getElementById('satcredit').hidden, link: document.querySelector('#satcredit a').href }; });
   ok('switched on, photos load around the view and the credit line shows', satOn.on && satOn.saved === true && satOn.loaded > 10 && satOn.shown > 10 && satOn.cached <= 140 && satOn.credit && /cloudless\.eox\.at/.test(satOn.link), JSON.stringify(satOn));
+  // zooming out over the same spot widens the set of photos wanted
+  const widen = await satPage.evaluate(() => { const g = window.__sky.sat, t = performance.now() / 1000; g.update(40.7, -73.83, 100, t); const a = g.want.size; g.update(40.7, -73.83, 150, t); return { a, b: g.want.size }; });
+  ok('zooming out over the same spot asks for the wider ring of photos', widen.b > widen.a, JSON.stringify(widen));
   // moving the sky far away fetches photos for the new place too
   const satMoved = await satPage.evaluate(async () => { const s = window.__sky, before = s.sat.loaded; s.S.center = 'KBOS'; s.applyCenter(); await new Promise((r) => setTimeout(r, 11000)); return { more: s.sat.loaded - before, shown: s.sat.shown(), cached: s.sat.cache.size }; });
   ok('after moving to another place, photos load there, and old ones are let go', satMoved.more > 0 && satMoved.shown > 10 && satMoved.cached <= 140, JSON.stringify(satMoved));
@@ -269,6 +272,9 @@ const { chromium } = require('playwright');
   const down = await satBad.evaluate(() => { const s = window.__sky; return { down: s.sat.down, failed: s.sat.failed, asked: s.sat.asked, land: s.ground.land.geometry.index ? s.ground.land.geometry.index.count : 0, landShown: s.ground.land.visible, note: document.getElementById('sat-note').textContent }; });
   await satBad.waitForTimeout(3000);
   const later = await satBad.evaluate(() => window.__sky.sat.asked);
+  // five minutes on, it tries again without the view having to move (the wait is cut short here)
+  const retried = await satBad.evaluate(async () => { const g = window.__sky.sat, before = g.asked; g.downUntil = 0; await new Promise((r) => setTimeout(r, 2000)); return g.asked > before; });
+  ok('after the pause, the page asks the photo service again on its own', retried);
   ok('when the photo service does not answer, the drawn map stays and the page stops asking', down.down && down.failed >= 12 && down.land > 0 && down.landShown && /not loading/.test(down.note) && later === down.asked, JSON.stringify(Object.assign(down, { later })));
   await satBad.close();
   console.log('errors:', errs.join(' ; ') || 'none');
