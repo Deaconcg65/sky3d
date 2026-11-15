@@ -285,7 +285,7 @@ const { chromium } = require('playwright');
     for (const [cat, t] of [['A1', 'C172'], ['', 'C172'], ['', 'C177'], ['', 'C17'], ['', 'H25B'], ['', 'H60'], ['', 'H500'], ['', 'A318'], ['', 'A319'], ['', 'A310'], ['', 'B744'], ['', 'A388'], ['A7', '']]) out[cat + ':' + t] = f(cat, t);
     return out; });
   ok('a Cessna 172 or 177 is drawn as a small plane, the C-17 as a four-engine jet, and the 747 and A380 each as their own shape', shapes['A1:C172'] === 'light' && shapes[':C172'] === 'light' && shapes[':C177'] === 'light' && shapes[':C17'] === 'heavy' && shapes[':B744'] === 'b747' && shapes[':A388'] === 'a380', JSON.stringify(shapes));
-  ok('a Hawker H25B is drawn as a jet, while H60, H500 and category A7 stay helicopters', shapes[':H25B'] === 'jet' && shapes[':H60'] === 'heli' && shapes[':H500'] === 'heli' && shapes['A7:'] === 'heli', JSON.stringify(shapes));
+  ok('a Hawker H25B is drawn as a business jet, while H60, H500 and category A7 stay helicopters', shapes[':H25B'] === 'biz' && shapes[':H60'] === 'heli' && shapes[':H500'] === 'heli' && shapes['A7:'] === 'heli', JSON.stringify(shapes));
   ok('the A318 and A319 are drawn as narrow bodies and the A310 as a wide body', shapes[':A318'] === 'jet' && shapes[':A319'] === 'jet' && shapes[':A310'] === 'heavy2', JSON.stringify(shapes));
   // ---------- version 3.8.1: the keyboard comes back to the sky, and the fly keys show while flying ----------
   const keyState = () => page.evaluate(() => ({ panel: document.body.classList.contains('panel'), mine: !document.getElementById('mine').hidden, kind: window.__sky.shot.kind, focus: document.activeElement.tagName, keys: document.getElementById('flykeys').classList.contains('on') }));
