@@ -162,6 +162,26 @@ const { chromium } = require('playwright');
   ok('Go there on an airport centers the sky on it', await page.evaluate(() => window.__sky.S.center === 'KJFK'));
   await page.fill('#f-lookq', 'zzzz nowhere'); await page.press('#f-lookq', 'Enter'); await page.waitForTimeout(600);
   ok('nothing found says so', /Nothing found/.test(await page.evaluate(() => document.getElementById('look-note').textContent)));
+  // ---------- version 3.7.1: My places takes an address, and the notes follow Keep my places ----------
+  const q1 = await placeAsked(), n1 = await page.evaluate(() => window.__sky.S.places.length);
+  await page.fill('#f-pname', 'Home'); await page.fill('#f-pll', 'Sunset Hill Rd, Redding, CT'); await page.click('#f-places button[type=submit]'); await page.waitForTimeout(800);
+  const addr = await page.evaluate(() => ({ rows: document.querySelectorAll('#pll-list .place').length, adds: [...document.querySelectorAll('#pll-list button')].map((b) => b.textContent), note: document.getElementById('places-note').textContent, n: window.__sky.S.places.length }));
+  ok('an address in the second My places box is looked up and the answers are listed to pick from', (await placeAsked()) === q1 + 1 && addr.rows === 3 && addr.adds.every((t) => t === 'Add') && /as Home/.test(addr.note) && addr.n === n1, JSON.stringify(addr));
+  await page.click('#pll-list .place:nth-child(2) button'); await page.waitForTimeout(400);
+  const home = await page.evaluate(() => { const s = window.__sky.S, pl = s.places.find((x) => x.n === 'Home'); return { pl, rows: document.querySelectorAll('#pll-list .place').length, name: document.getElementById('f-pname').value, where: document.getElementById('f-pll').value, note: document.getElementById('places-note').textContent }; });
+  ok('Add puts the picked answer in My places under the typed name', home.pl && Math.abs(home.pl.lat - 38.2494) < 1e-4 && home.rows === 0 && !home.name && !home.where && /^Home added\. It is kept on this device only\.$/.test(home.note), JSON.stringify(home));
+  await page.fill('#f-pname', 'Fairfield CT'); await page.fill('#f-pll', ''); await page.click('#f-places button[type=submit]'); await page.waitForTimeout(500);
+  await page.click('#pll-list .place:nth-child(1) button'); await page.waitForTimeout(300);
+  const twice = await page.evaluate(() => ({ note: document.getElementById('places-note').textContent, n: window.__sky.S.places.filter((x) => Math.abs(x.lat - 41.1414) < 1e-3).length }));
+  ok('an address typed in the name box alone is looked up too, and a place already in the list is not added twice', /already in My places as Fairfield/.test(twice.note) && twice.n === 1, JSON.stringify(twice));
+  await page.fill('#f-pname', ''); await page.fill('#f-lookq', 'fairfield ct'); await page.press('#f-lookq', 'Enter'); await page.waitForTimeout(500);
+  await page.click('#look-list .place:nth-child(3) button'); await page.waitForTimeout(400);
+  const kn = [await page.evaluate(() => document.getElementById('look-note').textContent)];
+  await page.click('#f-keep'); await page.waitForTimeout(200); kn.push(await page.evaluate(() => document.getElementById('look-note').textContent));
+  await page.click('#f-keep'); await page.waitForTimeout(200); kn.push(await page.evaluate(() => ({ note: document.getElementById('look-note').textContent, keep: window.__sky.S.keep, ticked: document.getElementById('f-keep').checked })));
+  ok('the note under Find a place changes when Keep my places is unticked and ticked again', /kept on this device only\.$/.test(kn[0]) && /until you close this page\.$/.test(kn[1]) && /kept on this device only\.$/.test(kn[2].note) && kn[2].keep === true && kn[2].ticked, JSON.stringify(kn));
+  for (let k = 0; k < 2; k++) { await page.evaluate(() => { const b = [...document.querySelectorAll('#places button')].find((x) => /^Remove (Home|<img)/.test(x.getAttribute('aria-label') || '')); if (b) b.click(); }); await page.waitForTimeout(300); }   // one at a time: the list is drawn again after each Remove
+  ok('the places added for these checks are removed again', await page.evaluate((n) => window.__sky.S.places.length === n, n1));
   await page.keyboard.press('Escape'); await page.waitForTimeout(300);
   // ---------- version 3.7.1: My places are kept, also with the page open twice ----------
   // a second copy of the page in the same browser adds a place; the first copy then changes a setting, which used to save its old list over it

@@ -80,6 +80,8 @@ body.panel #panel { transform: none; }
 #panel h1 { font-size: 22px; font-weight: 400; margin: 0 0 4px; }
 #panel p.lead { color: var(--faint); margin: 0 0 22px; font-size: 13.5px; line-height: 1.45; }
 #panel label { display: block; color: var(--soft); font-size: 13.5px; margin: 16px 0 6px; }
+#panel div.label { color: var(--soft); font-size: 13.5px; margin: 16px 0 6px; }
+#panel label.sub { font-size: 12.5px; margin: 10px 0 4px; }
 #panel select, #panel input[type=text] { width: 100%; font: 400 15px var(--face); color: var(--ink); background: rgba(255,255,255,0.06); border: 1px solid var(--line); border-radius: 8px; padding: 10px 11px; -webkit-appearance: none; appearance: none; }
 #panel select { background-image: linear-gradient(45deg, transparent 50%, var(--soft) 50%), linear-gradient(135deg, var(--soft) 50%, transparent 50%); background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 30px; }
 #panel option { color: #111; }
@@ -177,12 +179,15 @@ body.shared #panel .home-only { display: none; }
 <!--HOME-->    <div class="note" id="look-note">Press Enter or Find to search the airports on this page by code, name or city.</div><!--/HOME-->
   </form>
   <form id="f-places">
-    <label for="f-pname">My places</label>
+    <div class="label">My places</div>
     <div id="places"></div>
-    <input id="f-pname" type="text" maxlength="28" placeholder="Name, for example My House" autocomplete="off" spellcheck="false">
-    <input id="f-pll" type="text" maxlength="60" placeholder="Latitude, longitude: 40.6892, -74.0445" autocomplete="off" spellcheck="false" aria-label="Latitude and longitude" style="margin-top:8px">
+    <label for="f-pname" class="sub">Name for this place</label>
+    <input id="f-pname" type="text" maxlength="28" placeholder="For example Home" autocomplete="off" spellcheck="false" style="text-transform:none">
+    <label for="f-pll" class="sub">Address, city, or latitude and longitude</label>
+    <input id="f-pll" type="text" maxlength="100" placeholder="Sunset Hill Rd, Redding, CT or 40.6892, -74.0445" autocomplete="off" spellcheck="false" style="text-transform:none">
     <button type="submit" class="quiet" style="margin-top:8px">Add this place</button>
-    <div class="note" id="places-note">Paste the latitude and longitude from Google Earth or Google Maps. Each place gets a label on the ground and joins the list above.</div>
+    <div id="pll-list" style="margin-top:8px"></div>
+    <div class="note" id="places-note">Type an address or a city, or paste a latitude and longitude from Google Maps. Each place gets a label on the ground and joins the list above.</div>
     <label class="check" style="margin-top:12px"><input id="f-keep" type="checkbox"> Keep my places on this device</label>
     <div class="note">Your places stay on this device. They are never sent to this site or saved on it. Only a rough position, to about seven miles, is used to ask for the aircraft and the weather there. With the box unticked, your places are forgotten when you close this page.</div>
   </form>
