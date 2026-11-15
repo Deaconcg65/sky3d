@@ -89,6 +89,16 @@ function watchFlight(T) {
   const k = (T % 3600) / 3600;
   return { hex: 'a1f2e3', type: 'adsb_icao', flight: 'N2RF    ', r: 'N2RF', t: 'C25C', desc: 'CESSNA 525C CITATION CJ4', alt_baro: 41000, gs: 420, track: 270, baro_rate: 0, category: 'A2', lat: 40.3, lon: +(-75.5 - k * 3).toFixed(4), seen_pos: 0.6, seen: 0.2, messages: 4000 };
 }
+// stand-in for the OpenStreetMap place finder (version 3.7). It answers in its own shape, with two entries a relay must drop:
+// one with no usable position, and one whose name is markup, which the page must show as plain text.
+const PLACES = [
+  { place_id: 11, osm_type: 'relation', lat: '41.1414', lon: '-73.2637', display_name: 'Fairfield, Fairfield County, Connecticut, United States', type: 'town', importance: 0.6 },
+  { place_id: 12, lat: '38.2494', lon: '-122.0400', display_name: 'Fairfield, Solano County, California, United States', type: 'city' },
+  { place_id: 13, lat: 'NaN', lon: '1', display_name: 'Nowhere at all', type: 'bad' },
+  { place_id: 14, lat: '41.2', lon: '-73.3', display_name: '<img src=x onerror=alert(1)> Fairfield Beach', type: 'beach' },
+];
+const placesFor = (q) => (/nowhere|zzzz/i.test(q) ? [] : PLACES);
+let placeAsked = 0, placeLast = null;
 const DBDIR = path.join(root, 'dl/db');
 fs.mkdirSync(DBDIR, { recursive: true });   // dl/ is not kept in git, so a fresh copy has no folder to save the downloaded tables in
 function dbFile(name) {
@@ -134,6 +144,13 @@ http.createServer((req, res) => {
   }
   if (u.pathname === '/mock/v2/callsign/REDIR') { res.writeHead(302, { Location: 'http://127.0.0.1:' + PORT + '/tar1090/data/aircraft.json' }); return res.end(); }   // a flight network that tries to point the relay back at the receiver
   if (u.pathname.startsWith('/mock/v2/callsign/')) { const cs = decodeURIComponent(u.pathname.split('/').pop()); return json({ ac: cs === 'DAL2210' ? [farFlight(T)] : [], msg: 'No error', now: Math.round(T * 1000), total: cs === 'DAL2210' ? 1 : 0 }); }
+  if (u.pathname === '/mock/search') { placeAsked++; placeLast = { q: u.searchParams.get('q'), agent: req.headers['user-agent'] || '', keys: [...u.searchParams.keys()].sort().join(',') }; return json(placesFor(placeLast.q)); }
+  if (u.pathname.startsWith('/mock/place/')) {   // what the relay hands the page, for page checks run without a relay
+    placeAsked++; const q = decodeURIComponent(u.pathname.slice('/mock/place/'.length));
+    const out = placesFor(q).filter((p) => isFinite(+p.lat)).map((p) => ({ name: p.display_name, lat: +p.lat, lon: +p.lon, kind: p.type }));
+    return json({ places: out }, { 'Access-Control-Allow-Origin': '*' });
+  }
+  if (u.pathname === '/ctl/placeasked') return json({ asked: placeAsked, last: placeLast });   // how often the place finder was asked, and the last question
   if (u.pathname.startsWith('/mock/v2/reg/')) { regAsked++; const r = decodeURIComponent(u.pathname.split('/').pop()); const ac = r === 'N2RF' && watchShown ? [watchFlight(T)] : []; return json({ ac, msg: 'No error', now: Math.round(T * 1000), total: ac.length }); }
   if (u.pathname === '/ctl/watch') { watchShown = u.searchParams.get('on') !== '0'; return json({ watchShown }); }   // N2RF in the air (on=1) or not (on=0)
   if (u.pathname === '/ctl/regasked') return json({ asked: regAsked });   // how many times the stand-in flight network has been asked about one registration

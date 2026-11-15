@@ -5,8 +5,11 @@ This small program runs on the receiver itself and does two jobs.
 
 1. Relay. Web browsers are not allowed to read the free flight networks directly, because those networks do not give web
    pages that permission. The 3D sky page asks the relay, the relay asks a flight network over the home internet
-   connection, and the relay hands the answer back. It passes on only three kinds of question: aircraft around a point,
-   one flight by callsign, and one aircraft by registration.
+   connection, and the relay hands the answer back. It passes on only four kinds of question: aircraft around a point,
+   one flight by callsign, one aircraft by registration, and (since version 3.7) a typed place, which it looks up with the
+   OpenStreetMap place finder (Nominatim) so that the place finder sees this receiver's address instead of each viewer's.
+   For a place, only the words the viewer typed are sent, at most one question a second and about 200 an hour for everyone
+   together, and answers are kept for a day so the same words are not sent twice.
 
 2. Front door, for sharing the page with people outside the house through a secure tunnel. Point the tunnel at this
    program (port 8099) and not at the receiver's web server. People outside can then reach exactly four things and
@@ -35,7 +38,7 @@ Viewers who arrive through a tunnel all appear to come from this receiver itself
 is. Cloudflare Tunnel does that in a header named CF-Connecting-IP, which is what the relay reads. For another tunnel,
 set SKY3D_VIEWER_HEADER to the header it uses. Without one, all outside viewers share a single allowance.
 """
-import gzip, ipaddress, json, os, re, socket, threading, time, urllib.error, urllib.request, zlib
+import gzip, ipaddress, json, math, os, re, socket, threading, time, unicodedata, urllib.error, urllib.parse, urllib.request, zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get('SKY3D_RELAY_PORT', '8099'))
@@ -50,14 +53,19 @@ NETWORKS = [
     ('airplanes.live', 'https://api.airplanes.live/v2/point/{0}/{1}/{2}', 'https://api.airplanes.live/v2/callsign/{0}', 'https://api.airplanes.live/v2/reg/{0}'),
     ('adsb.one', 'https://api.adsb.one/v2/point/{0}/{1}/{2}', 'https://api.adsb.one/v2/callsign/{0}', 'https://api.adsb.one/v2/reg/{0}'),
 ]
+# The place finder. Its rules: no more than one request a second, a name for the program that asks, answers kept and not
+# asked for again, and no searching as someone types. The page asks only when the viewer presses Enter or Find.
+PLACES = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&q={0}'
 TEST = os.environ.get('SKY3D_RELAY_TEST')   # for testing only: one stand-in network at this address
 if TEST:
     NETWORKS = [('stand-in', TEST + '/v2/point/{0}/{1}/{2}', TEST + '/v2/callsign/{0}', TEST + '/v2/reg/{0}')]
+    PLACES = TEST + '/search?format=jsonv2&limit=5&q={0}'
 
 A = re.ASCII
 POINT = re.compile(r'/v2/point/(-?[0-9]{1,2}(?:\.[0-9]{1,4})?)/(-?[0-9]{1,3}(?:\.[0-9]{1,4})?)/([0-9]{1,3})', A)
 CALLSIGN = re.compile(r'/v2/callsign/([A-Za-z0-9]{2,8})', A)
 REG = re.compile(r'/v2/reg/([A-Za-z0-9-]{2,8})', A)
+PLACE = re.compile(r"/place/([A-Za-z0-9%._~!$&'()*+,;=:@-]{1,280})", A)   # the typed words, as the page encodes them
 # What the page reads from the receiver's own web server. Nothing outside these patterns is ever fetched from it.
 AIRCRAFT = re.compile(r'/(?:tar1090/data|data|skyaware/data)/aircraft\.json', A)
 RECEIVER = re.compile(r'/(?:tar1090/data|data|skyaware/data)/receiver\.json', A)
@@ -83,6 +91,9 @@ NET_RATE, NET_BURST = float(os.environ.get('SKY3D_NET_RATE', '0.75')), 6        
 LOOK_RATE, LOOK_BURST = float(os.environ.get('SKY3D_LOOK_RATE', '0.25')), 4       # the same for single flights, kept apart so one cannot starve the other
 VIEWER_RATE, VIEWER_BURST = float(os.environ.get('SKY3D_VIEWER_RATE', '5')), 150  # requests a second from one viewer; the page itself needs about one and a half
 ASK_RATE, ASK_BURST = float(os.environ.get('SKY3D_ASK_RATE', '0.5')), 5           # new questions to the flight networks one viewer may cause; the page needs under half that
+PLACE_RATE, PLACE_BURST = 1.0, 1          # questions a second to the place finder, for all viewers together: its own limit
+PLACE_HOURLY = 200                         # and about this many an hour, so nobody can turn the relay into a heavy user of it
+PLACE_KEEP = 24 * 3600.0                   # a place found is kept this long, and the same words are not sent again meanwhile
 MAX_BODY = 8 * 1024 * 1024
 MAX_AT_ONCE = 48        # requests being answered at once
 MAX_CONNECTIONS = 96    # connections open at once
@@ -93,11 +104,15 @@ class Bucket:
     def __init__(self, rate, burst):
         self.rate, self.burst, self.tokens, self.t = rate, burst, float(burst), time.monotonic()
 
-    def take(self):
+    def ready(self):
+        """Whether one more request would be allowed right now, without taking it."""
         now = time.monotonic()
         self.tokens = min(self.burst, self.tokens + (now - self.t) * self.rate)
         self.t = now
-        if self.tokens >= 1:
+        return self.tokens >= 1
+
+    def take(self):
+        if self.ready():
             self.tokens -= 1
             return True
         return False
@@ -111,6 +126,8 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 lock = threading.Lock()
 kept, failed, best = {}, {}, [0]         # flight network answers by question, questions nobody could answer, and which network answered last
 net_bucket, look_bucket = Bucket(NET_RATE, NET_BURST), Bucket(LOOK_RATE, LOOK_BURST)
+place_bucket, place_hour = Bucket(PLACE_RATE, PLACE_BURST), Bucket(PLACE_HOURLY / 3600.0, 20)
+places_kept, places_failed = {}, {}     # place answers by the typed words, and words the place finder could not answer just now
 viewers = {}                             # allowances per viewer; held in memory only and never written down
 local, local_failed, locks = {}, {}, {}  # antenna data fetched from the receiver's web server, and one lock per question
 page = {'key': None, 'raw': b'', 'gz': b'', 'etag': ''}
@@ -154,6 +171,50 @@ def ask(address):
     now = data.get('now')
     out = {'ac': facts(aircraft), 'now': now if isinstance(now, (int, float)) else 0}
     return True, status, json.dumps(out, separators=(',', ':')), len(out['ac'])
+
+
+def place_words(encoded):
+    """The typed words from the address the page asked for, tidied, or None when they are not something to look up."""
+    try:
+        text = urllib.parse.unquote(encoded, errors='strict')
+    except UnicodeDecodeError:
+        return None
+    text = ' '.join(text.split())
+    if not 2 <= len(text) <= 100 or any(unicodedata.category(c)[0] == 'C' for c in text):
+        return None
+    return text
+
+
+def ask_places(text):
+    """Ask the place finder. Returns (worked, status, text). The answer is rebuilt from a name and a position for each
+    place, so nothing else the place finder sends is ever handed on."""
+    headers = {'Accept': 'application/json', 'Accept-Language': 'en', 'User-Agent': AGENT}
+    try:
+        with outward.open(urllib.request.Request(PLACES.format(urllib.parse.quote(text, safe='')), headers=headers), timeout=8) as answer:
+            status, raw = answer.status, answer.read(1024 * 1024).decode('utf-8', 'replace')
+    except urllib.error.HTTPError as e:
+        return False, e.code, ''
+    except Exception:   # the place finder is down, slow, or not reachable
+        return False, 0, ''
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return False, status, ''
+    if not isinstance(data, list):
+        return False, status, ''
+    out = []
+    for p in data[:5]:
+        if not isinstance(p, dict) or not isinstance(p.get('display_name'), str) or not p['display_name'].strip():
+            continue
+        try:
+            lat, lon = float(p.get('lat')), float(p.get('lon'))
+        except (TypeError, ValueError):
+            continue
+        if not (math.isfinite(lat) and math.isfinite(lon) and abs(lat) <= 90 and abs(lon) <= 180):
+            continue
+        kind = p.get('type') if isinstance(p.get('type'), str) else ''
+        out.append({'name': ' '.join(p['display_name'].split())[:160], 'lat': round(lat, 5), 'lon': round(lon, 5), 'kind': kind[:30]})
+    return True, status, json.dumps({'places': out}, separators=(',', ':'))
 
 
 def from_web(path):
@@ -358,6 +419,10 @@ class Relay(BaseHTTPRequestHandler):
             return self.say(200, '3D sky relay is running.')
         if path == '/check' and not outside:   # which flight networks answer this relay. Only from another computer inside the house.
             return self.send_check()
+        m = PLACE.fullmatch(path)
+        if m:
+            status, body, extra = self.place_answer(m.group(1), asking)
+            return self.reply(status, body, extra=extra) if status != 404 else self.say(404, 'Not found')
         status, body, extra = self.network_answer(path, asking)
         self.reply(status, body, extra=extra) if status != 404 else self.say(404, 'Not found')
 
@@ -436,6 +501,49 @@ class Relay(BaseHTTPRequestHandler):
             with lock:
                 checked[0], checked[1] = time.monotonic(), recent
         self.reply(200, recent)
+
+    def place_answer(self, encoded, asking):
+        """Returns (status, text, extra headers) for one typed place. The words are the only thing sent on."""
+        text = place_words(encoded)
+        if text is None:
+            return 404, '', None
+        key = text.casefold()
+        busy = (503, json.dumps({'error': 'The place finder has been asked as often as it may for now. Try again in a moment.'}), {'Retry-After': '2'})
+        mine = lock_for('place ' + key)
+        if not mine.acquire(timeout=10):
+            return busy
+        try:
+            now = time.monotonic()
+            with lock:
+                hit, bad = places_kept.get(key), places_failed.get(key)
+            if hit and now - hit[0] < PLACE_KEEP:
+                return 200, hit[1], None
+            if bad and now - bad < 30:
+                return 502, json.dumps({'error': 'The place finder did not answer.'}), None
+            with lock:   # the viewer's own allowance, the place finder's one a second, and the hourly ceiling, all or nothing
+                may_ask = place_hour.ready() and place_bucket.ready() and asking.take() and place_bucket.take() and place_hour.take()
+            if not may_ask:
+                return busy
+            worked, status, body = ask_places(text)
+            with lock:
+                now = time.monotonic()
+                if worked:
+                    for old in [k for k, v in places_kept.items() if now - v[0] > PLACE_KEEP]:
+                        del places_kept[old]
+                    if len(places_kept) > 1000:   # still too many: let go of the oldest
+                        for old in sorted(places_kept, key=lambda k: places_kept[k][0])[:200]:
+                            del places_kept[old]
+                    places_kept[key] = (now, body)
+                    places_failed.pop(key, None)
+                else:
+                    if len(places_failed) > 200:
+                        places_failed.clear()
+                    places_failed[key] = now
+            if worked:
+                return 200, body, None
+            return 502, json.dumps({'error': 'The place finder did not answer.'}), None
+        finally:
+            mine.release()
 
     def network_answer(self, path, asking):
         """Returns (status, text, extra headers) for one question to the flight networks. Nothing is sent from here,

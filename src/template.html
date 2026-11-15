@@ -1,10 +1,10 @@
 <!doctype html>
 <!--
-  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3.6, /*EDITION*/.
+  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3.7, /*EDITION*/.
   One self-contained page. Put it on the receiver's web server and open it in a browser.
   Includes three.js (c) 2010-2024 three.js authors, MIT License.
   Shorelines: GSHHG (Wessel and Smith, LGPL) and Natural Earth (public domain). State lines: United States Census Bureau.
-  Airports and runways: OurAirports (public domain). Weather: Open-Meteo.com (CC BY 4.0).<!--NET--> Flight network: ADSB.lol (ODbL).<!--/NET-->
+  Airports and runways: OurAirports (public domain). Weather: Open-Meteo.com (CC BY 4.0).<!--NET--> Flight network: ADSB.lol (ODbL). Place finder: OpenStreetMap Nominatim (data ODbL, (c) OpenStreetMap contributors).<!--/NET-->
 -->
 <html lang="en">
 <head>
@@ -157,6 +157,13 @@ body.shared #panel .home-only { display: none; }
     <div class="note" id="other-note"></div>
   </div>
 
+  <form id="f-look">
+    <label for="f-lookq">Find a place</label>
+    <div class="row"><input id="f-lookq" type="text" maxlength="100" placeholder="Airport, city, zip code or address" autocomplete="off" spellcheck="false" style="text-transform:none"><button type="submit">Find</button></div>
+    <div id="look-list" style="margin-top:8px"></div>
+<!--NET-->    <div class="note" id="look-note">Press Enter or Find to look it up. Airport codes are found on this page. Anything else is sent, through this receiver, to the OpenStreetMap place finder: only the words you typed, never your position. If you type a street address, that address is what is sent. Places by <b>OpenStreetMap</b>.</div><!--/NET-->
+<!--HOME-->    <div class="note" id="look-note">Press Enter or Find to search the airports on this page by code, name or city.</div><!--/HOME-->
+  </form>
   <form id="f-places">
     <label for="f-pname">My places</label>
     <div id="places"></div>
@@ -219,7 +226,7 @@ body.shared #panel .home-only { display: none; }
 
   <hr>
   <dl id="keys-dl"></dl>
-  <p class="note" style="margin-top:22px">Version 3.6, /*EDITION*/, November 15, 2026</p>
+  <p class="note" style="margin-top:22px">Version 3.7, /*EDITION*/, November 15, 2026</p>
 </aside>
 <script type="application/json" id="geo-data">/*GEO*/</script>
 <script type="application/json" id="airport-data">/*AIRPORTS*/</script>

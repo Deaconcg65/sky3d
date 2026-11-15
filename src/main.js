@@ -985,6 +985,68 @@ function addPlace() {
   $('f-pname').value = ''; $('f-pll').value = ''; note.textContent = name + (S.keep ? ' added. It is kept on this device only.' : ' added. It will be forgotten when you close this page.');
   buildCenterOptions(); renderPlaces(); rebuildLabels();
 }
+// ---------- finding a typed place (version 3.7) ----------
+// An airport code is found in the airport list on this page. In the network edition anything else is looked up through the
+// relay on the receiver, which asks the OpenStreetMap place finder: only the typed words are sent, only when the viewer
+// presses Enter or Find, and the place finder sees the receiver's address, not the viewer's. Answers are kept here as well.
+// The home edition has no relay, so it searches the airport list by code, name or city only. A place picked from the
+// results joins My places, with the same rules for keeping it on this device.
+const placeCache = new Map();
+let lookSeq = 0;
+const placeApi = () => (__NET__ ? (Q.get('placeApi') || (relayBase() ? relayBase() + '/place/' : '')) : '');
+function airportsMatching(text) {
+  const words = text.toLowerCase().split(' ').filter(Boolean);
+  return AIRPORTS.filter((a) => { const h = (a[2] + ' ' + (a[3] || '') + ' ' + (a[1] || '') + ' ' + a[0]).toLowerCase(); return words.every((w) => h.indexOf(w) !== -1); })
+    .sort((x, y) => (y[7] || 0) - (x[7] || 0)).slice(0, 5)
+    .map((a) => ({ name: a[2], sub: [a[3], a[1] || a[0]].filter(Boolean).join(', '), lat: a[4], lon: a[5], code: a[0] }));
+}
+async function lookPlace() {
+  const text = $('f-lookq').value.replace(/\s+/g, ' ').trim().slice(0, 100), note = $('look-note'), seq = ++lookSeq, up = text.toUpperCase();
+  const show = (list, msg) => { if (seq === lookSeq) { showLook(list); note.textContent = msg; } };
+  if (text.length < 2) return show([], 'Type at least two letters.');
+  const a = /^[A-Z0-9]{3,4}$/.test(up) ? AP[up] || AP['K' + up] : null;
+  if (a) return show([{ name: a[2], sub: [a[3], a[1] || a[0]].filter(Boolean).join(', '), lat: a[4], lon: a[5], code: a[0] }], 'An airport on this page.');
+  const api = placeApi();
+  if (!api) { const list = airportsMatching(text); return show(list, list.length ? 'Airports on this page that match.' : __NET__ ? 'No airport on this page matches, and this copy has no relay to look up other places.' : 'No airport on this page matches. Try an airport code, or paste a latitude and longitude below.'); }
+  if (encodeURIComponent(text).length > 270) return show([], 'That is too long to look up. Try fewer words.');
+  const key = text.toLowerCase(); let found = placeCache.get(key);
+  if (!found) {
+    show([], 'Looking up ' + text + '...');
+    try {
+      const d = await getJSON(api + encodeURIComponent(text));
+      found = (Array.isArray(d && d.places) ? d.places : []).filter((p) => p && typeof p.name === 'string' && p.name.trim() && isFinite(+p.lat) && isFinite(+p.lon) && Math.abs(+p.lat) <= 90 && Math.abs(+p.lon) <= 180).slice(0, 5)
+        .map((p) => { const parts = p.name.split(',').map((x) => x.trim()).filter(Boolean); return { name: parts[0] || p.name.trim(), sub: parts.slice(1).join(', '), lat: +p.lat, lon: +p.lon }; });
+      if (placeCache.size > 100) placeCache.clear();
+      placeCache.set(key, found);
+    } catch (e) { return show([], e && e.message === '503' ? 'The place finder is busy. Try again in a moment.' : 'The place finder did not answer. Try again later, or paste a latitude and longitude below.'); }
+  }
+  show(found, found.length ? 'Pick one to center the sky there. It joins My places.' : 'Nothing found for that. Try adding a state or a country.');
+}
+function showLook(list) {
+  const box = $('look-list'); box.innerHTML = '';
+  list.forEach((item) => {
+    const row = document.createElement('div'); row.className = 'place';
+    const name = document.createElement('span'); name.textContent = item.name; const sub = document.createElement('small'); sub.textContent = item.sub || item.lat.toFixed(4) + ', ' + item.lon.toFixed(4);
+    const go = document.createElement('button'); go.type = 'button'; go.className = 'quiet'; go.textContent = 'Go there'; go.setAttribute('aria-label', 'Go to ' + item.name); go.onclick = () => goPlace(item);
+    name.appendChild(sub); row.appendChild(name); row.appendChild(go); box.appendChild(row);
+  });
+}
+function goPlace(item) {
+  const note = $('look-note');
+  if (item.code) {   // an airport: center on it the way the airport list does
+    if (PRESETS.some((x) => x[0] === item.code)) S.center = item.code; else { S.center = 'OTHER'; S.other = item.code; $('f-other').value = S.other; $('other-note').textContent = item.name; }
+    note.textContent = 'The sky is now centered on ' + item.name + '.';
+  } else {
+    const list = placeList(); let i = list.findIndex((pl) => Math.abs(pl.lat - item.lat) < 0.0005 && Math.abs(pl.lon - item.lon) < 0.0005);
+    if (i === -1) {
+      if (list.length >= 20) { note.textContent = 'My places is full at 20. Remove one first.'; return; }
+      S.places = list.concat([{ n: item.name.slice(0, 28), lat: +item.lat.toFixed(5), lon: +item.lon.toFixed(5) }]); i = S.places.length - 1;
+    }
+    S.center = 'P' + i;
+    note.textContent = item.name + (S.keep ? ' is in My places, kept on this device only.' : ' is in My places until you close this page.');
+  }
+  save(); $('look-list').innerHTML = ''; $('f-lookq').value = ''; buildCenterOptions(); renderPlaces(); applyCenter();
+}
 function applyCenter() {
   if (__NET__) setTimeout(() => netTick(true), 50);
   C = centerPoint(); reorigin(C.lat, C.lon); for (const p of planes.values()) for (const s of p.trail) s.ep = -1;
@@ -1013,6 +1075,7 @@ function initPanel() {
   if (__NET__) $('f-src').onchange = (e) => { S.src = e.target.value; save(); netTick(true); updateCorner(simClock || new Date()); };
   $('f-trail').onchange = (e) => { S.trail = +e.target.value; save(); };
   renderPlaces(); $('f-places').onsubmit = (e) => { e.preventDefault(); addPlace(); };
+  $('f-look').onsubmit = (e) => { e.preventDefault(); lookPlace(); };   // only on Enter or Find, never as the viewer types
   $('f-keep').checked = !!S.keep; $('f-keep').onchange = (e) => { S.keep = e.target.checked; save(); $('places-note').textContent = S.keep ? 'Your places will be kept on this device.' : 'Your places are no longer kept. They will be forgotten when you close this page.'; };
   if (SHARED) {   // a guest is not looking at an antenna of their own, and has no relay to point at
     document.body.classList.add('shared');
@@ -1286,7 +1349,7 @@ if (S.follow) setFollow(S.follow);
 if (!MANUAL) { poll(); setInterval(followTick, 1000); setInterval(watchTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, watchTick, watchState, watch, addWatch, dismissWatch, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
   net, NET: __NET__ };

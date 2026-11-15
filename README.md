@@ -2,6 +2,11 @@
 
 Live aircraft from a readsb or dump1090 receiver, drawn in three dimensions in a web browser. The camera glides from aircraft to aircraft, settles beside each one, then pulls back to the whole sky.
 
+New in version 3.7:
+
+- Watch list, both editions. In the settings, list up to 10 tail numbers or flight numbers (N2RF is there to start on your own screens). When one is seen, an alert line appears at the top of the page with Follow and Dismiss, with a short chime. The home edition alerts when your antenna hears one. The network edition also asks the flight networks about each one, through the relay, about every two minutes, so it alerts wherever in the world the aircraft is flying. A new alert for the same aircraft comes only after it has been out of sight for 20 minutes. On the secure (https) address you can also allow a browser notification for when the page is in the background. Alerts come only while a page is open.
+- Find a place. In the settings, type an airport code, a city, a zip code or an address and press Enter or Find, then pick a result to center the sky there. It joins My places. Airport codes are found on the page itself. In the network edition anything else is looked up through the relay on your receiver with the OpenStreetMap place finder, so the place finder sees your receiver's address, not the viewer's. Only the typed words are sent, and only when Enter or Find is pressed. The home edition searches its own airport list by code, name or city.
+
 New in version 3.6, both editions: you can take the controls. Press H in the page for the full list.
 
 - Keys. A is the auto tour, W pulls back to the whole sky, F takes the controls (fly mode), plus and minus zoom, S is the settings, L is Listen, Space holds on an aircraft. Full screen moved to Shift and F. T changes the trail length and C turns captions on or off.
@@ -87,7 +92,7 @@ The page reads `/tar1090/data/aircraft.json` once a second. It also looks in `/d
 
 ## The relay (network edition only)
 
-Web browsers are not allowed to read the free flight networks directly, because those networks do not give web pages that permission. The network edition therefore reads them through a relay: a small helper, `relay/relay.py`, that runs on the receiver, fetches the list over your home internet connection, and hands it to the page. It listens on port 8099 inside your home network and passes on only three kinds of question: aircraft around a point, one flight by callsign, and one aircraft by registration. It tries four free flight networks in turn. Opening `http://<receiver address>:8099/check` from inside your home network shows which of them are answering.
+Web browsers are not allowed to read the free flight networks directly, because those networks do not give web pages that permission. The network edition therefore reads them through a relay: a small helper, `relay/relay.py`, that runs on the receiver, fetches the list over your home internet connection, and hands it to the page. It listens on port 8099 inside your home network and passes on only four kinds of question: aircraft around a point, one flight by callsign, one aircraft by registration, and a typed place. It tries four free flight networks in turn. Places are looked up with the OpenStreetMap place finder (Nominatim), at most once a second and about 200 times an hour for all viewers together, and each answer is kept for a day so the same words are not sent again. Opening `http://<receiver address>:8099/check` from inside your home network shows which of them are answering.
 
 The relay has to run at home. The flight networks ration or refuse requests that come from shared cloud hosting, so a relay on a free cloud service does not work. For the same reason the public copy of the network edition cannot show aircraft by itself.
 
@@ -124,6 +129,8 @@ Nothing from your antenna is sent anywhere, in either edition. These lookups go 
 - The route (origin and destination) of the aircraft being visited, from the adsb.im route service that the tar1090 map page also uses, with api.adsb.lol as a fallback.
 - In follow mode only, the position of the one flight you named, from api.adsb.lol, while it is beyond your antenna's reach.
 - Network edition only: the aircraft around the place on screen, fetched by the relay on your receiver from api.adsb.lol (with adsb.fi, airplanes.live and adsb.one as fallbacks). Only the centre of the view, rounded to a tenth of a degree (about seven miles), and a radius are sent. Choose "My antenna only" to switch this off. The home edition never makes this request.
+- Network edition only, the watch list: each tail number or flight number on it, asked about by the relay on your receiver, one at a time, each about every two minutes, and never while the page already sees it.
+- Network edition only, Find a place: the words you typed, sent by the relay on your receiver to nominatim.openstreetmap.org when you press Enter or Find. Airport codes are found on the page and sent nowhere. If you type a street address, that address is what is sent. Your position is never sent with it.
 - The weather for the place on screen, from api.open-meteo.com. Only a position rounded to a quarter of a degree (about 17 miles) is sent. Choose "Always clear" under Weather in the settings to switch this off.
 
 Your own places ("My House" and the like) are never sent anywhere by name or by exact position. Centering the sky on one sends only the rounded positions described above.
