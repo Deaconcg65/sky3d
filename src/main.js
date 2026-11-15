@@ -65,7 +65,7 @@ window.addEventListener('storage', (e) => {
       S.center = i === -1 ? DEFAULTS.center : 'P' + i;
       if (i === -1) applyCenter(false);
     }
-    buildCenterOptions(); renderPlaces(); rebuildLabels();
+    buildCenterOptions(); renderPlaces(); rebuildLabels(); if (!$('mine').hidden) renderMine();
   }
   if (Array.isArray(o.watch)) {
     const next = [...new Set(o.watch.map(watchKey).filter(Boolean))].slice(0, WATCH_MAX);
@@ -1267,16 +1267,24 @@ function toggleHelp(on) { const h = $('help'), open = on === undefined ? h.hidde
 // Version 3.7.1: P opens a small window with just the viewer's places, the same list as "Center the sky on". One click moves the sky there.
 function openMine() {
   toggleHelp(false); closeFind(); document.body.classList.remove('panel'); held.clear(); document.body.classList.add('awake');
-  const box = $('mine-list'); box.innerHTML = ''; const list = placeList(), cur = /^P\d+$/.test(S.center) ? +S.center.slice(1) : -1;
+  renderMine(); $('mine').hidden = false;
+  const first = $('mine-list').querySelector('button') || $('mine-close'); first.focus();
+}
+// Each button goes to the place it names, looked up when clicked, so a list changed in another copy of the page meanwhile never sends the sky to a different place
+function renderMine() {
+  const box = $('mine-list'), had = box.contains(document.activeElement); box.innerHTML = ''; const list = placeList(), cur = /^P\d+$/.test(S.center) ? +S.center.slice(1) : -1;
   list.forEach((pl, i) => {
     const b = document.createElement('button'); b.type = 'button';
     b.textContent = pl.n + (i === cur ? '  (here now)' : ''); b.setAttribute('aria-label', 'Go to ' + pl.n);
-    b.onclick = () => { closeMine(); S.center = 'P' + i; save(); buildCenterOptions(); applyCenter(); };
+    b.onclick = () => {
+      const j = placeList().findIndex((q) => q.n === pl.n && q.lat === pl.lat && q.lon === pl.lon);
+      if (j === -1) { renderMine(); return; }
+      closeMine(); S.center = 'P' + j; save(); buildCenterOptions(); applyCenter();
+    };
     box.appendChild(b);
   });
   $('mine-note').textContent = list.length ? 'Click one to move the sky there. P or Escape closes this.' : 'No places yet. Press S, then add one under My places or with Find a place.';
-  $('mine').hidden = false;
-  const first = box.querySelector('button') || $('mine-close'); first.focus();
+  if (had) (box.querySelector('button') || $('mine-close')).focus();
 }
 function closeMine() { const m = $('mine'); if (m.hidden) return; m.hidden = true; const ae = document.activeElement; if (ae && m.contains(ae) && ae.blur) ae.blur(); }
 let findSel = 0, findList = [], routesAsked = -1e9, findTimer = 0;

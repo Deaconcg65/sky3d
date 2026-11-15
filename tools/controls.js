@@ -195,6 +195,19 @@ const { chromium } = require('playwright');
   const esc = await page.evaluate(() => document.getElementById('mine').hidden);
   await page.keyboard.press('p'); await page.waitForTimeout(200); await page.keyboard.press('p'); await page.waitForTimeout(200);
   ok('Escape closes My places, and so does P again', esc && await page.evaluate(() => document.getElementById('mine').hidden));
+  // My places open while another copy removes a place: the window shows the new list, and each button still goes to the place it names
+  const synced = await page.evaluate(async () => {
+    const s = window.__sky, wait = (ms) => new Promise((r) => setTimeout(r, ms)); s.openMine(); await wait(200);
+    const before = [...document.querySelectorAll('#mine-list button')].map((b) => b.textContent);
+    const o = JSON.parse(localStorage.getItem('sky3d')); const left = o.places.filter((p) => p.n !== 'Fairfield');
+    window.dispatchEvent(new StorageEvent('storage', { key: 'sky3d', newValue: JSON.stringify(Object.assign({}, o, { places: left })) }));
+    await wait(200);
+    const after = [...document.querySelectorAll('#mine-list button')].map((b) => b.textContent);
+    const btn = [...document.querySelectorAll('#mine-list button')].find((b) => /^My House/.test(b.textContent)); if (btn) btn.click(); await wait(300);
+    const i = /^P\d+$/.test(s.S.center) ? +s.S.center.slice(1) : -1;
+    return { before, after, went: i >= 0 && s.S.places[i] && s.S.places[i].n, closed: document.getElementById('mine').hidden };
+  });
+  ok('My places open while another copy removes a place shows the new list, and its buttons still go where they say', synced.before.length === 2 && synced.after.length === 1 && synced.went === 'My House' && synced.closed, JSON.stringify(synced));
   // ---------- version 3.7.1: where a flight comes from ----------
   // a flight number with a stop on the way: low and coming down at New York, the caption shows the leg from Los Angeles, not Los Angeles to Boston
   const legs = await page.evaluate(() => {
