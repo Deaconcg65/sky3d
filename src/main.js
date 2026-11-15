@@ -573,8 +573,8 @@ const goodRoute = (rt) => rt && Array.isArray(rt._airports) && rt._airports.leng
 // networks), so a page with a relay beside it asks the relay first (version 3.9), and the relay asks them from home.
 // Only when the relay cannot answer does the page ask the services itself.
 const routeRelay = () => (Q.has('routeApi') ? '' : relayBase());
-async function askRoutes(list) {   // list: [{ callsign, lat, lng }]. Returns the routes found by callsign, and whether any service answered.
-  const got = new Map(); let left = list, answered = false;
+async function askRoutes(list) {   // list: [{ callsign, lat, lng }]. Returns the routes found by callsign, and the callsigns a service answered for, found or not.
+  const got = new Map(), answered = new Set(); let left = list;
   const rb = routeRelay();
   if (rb) {
     const parts = []; for (let i = 0; i < left.length; i += 10) parts.push(left.slice(i, i + 10));
@@ -582,10 +582,10 @@ async function askRoutes(list) {   // list: [{ callsign, lat, lng }]. Returns th
     await Promise.all(parts.map(async (part) => {
       try {
         const items = part.map((w) => w.callsign + ',' + w.lat.toFixed(2) + ',' + w.lng.toFixed(2)).join(';');
-        const arr = await getJSON(rb + '/routes/' + items); if (!Array.isArray(arr)) return; answered = true;
+        const arr = await getJSON(rb + '/routes/' + items); if (!Array.isArray(arr)) return;
         for (const x of arr) {
           if (!x || !part.some((w) => w.callsign === x.callsign)) continue;
-          settled.add(x.callsign); const good = goodRoute(x); if (good) got.set(x.callsign, good);
+          settled.add(x.callsign); answered.add(x.callsign); const good = goodRoute(x); if (good) got.set(x.callsign, good);
         }
       } catch (e) { /* the relay is not there or could not ask: the page asks the services itself */ }
     }));
@@ -595,7 +595,7 @@ async function askRoutes(list) {   // list: [{ callsign, lat, lng }]. Returns th
   for (const url of ROUTE_APIS) {
     try {
       const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: JSON.stringify({ planes: left }) });
-      if (!r.ok) continue; const arr = await r.json(); if (!Array.isArray(arr)) continue; answered = true;
+      if (!r.ok) continue; const arr = await r.json(); if (!Array.isArray(arr)) continue; for (const w of left) answered.add(w.callsign);   // a service that answers, answers for every flight it was asked about
       const one = left.length === 1 ? arr.find((x) => x && x.callsign === left[0].callsign) || arr[0] : null;
       for (const x of one ? [Object.assign({}, one, { callsign: left[0].callsign })] : arr) {
         if (!x || !x.callsign) continue; const good = goodRoute(x); if (good && left.some((w) => w.callsign === x.callsign)) got.set(x.callsign, good);
@@ -612,7 +612,7 @@ async function getRoute(p) {
   const { got, answered } = await askRoutes([{ callsign: cs, lat: +p.rLat.toFixed(3), lng: +p.rLon.toFixed(3) }]);
   const good = got.get(cs);
   if (good) { routes.set(cs, { route: good, until: nowS() + 6 * 3600 }); return good; }
-  if (answered) routes.set(cs, { route: null, until: nowS() + 600 });
+  if (answered.has(cs)) routes.set(cs, { route: null, until: nowS() + 600 });
   return null;
 }
 // The part of a route to show. A flight number can make stops (Los Angeles, New York, Boston), so an aircraft low to the ground
@@ -1453,7 +1453,7 @@ async function prefetchRoutes() {
   for (const w of want) {
     const good = got.get(w.callsign);
     if (good) routes.set(w.callsign, { route: good, until: nowS() + 6 * 3600 });
-    else if (answered) routes.set(w.callsign, { route: null, until: nowS() + 600 });   // flights no service knows are asked again in ten minutes
+    else if (answered.has(w.callsign)) routes.set(w.callsign, { route: null, until: nowS() + 600 });   // flights no service knows are asked again in ten minutes; flights nobody answered for, sooner
   }
 }
 // a route to trust, as the two airports of the leg being flown: the same guard the caption uses, so a wrong entry in the route
