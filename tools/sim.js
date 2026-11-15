@@ -131,6 +131,13 @@ http.createServer((req, res) => {
     const files = []; for (let back = spans[0]; back > spans[1]; back -= 8) { const t = T - back; files.push({ now: +t.toFixed(1), messages: 1, aircraft: snapshot(t).map((a) => [a.hex, a.alt_baro, a.gs, a.track, a.lat, a.lon, a.seen_pos, a.type, a.flight, a.messages]) }); }
     return json(zlib.gzipSync(JSON.stringify({ files })), { 'Content-Encoding': 'gzip' });
   }
+  // a route service that knows no flights at all: the page must then ask the next service (version 3.7.1)
+  if (u.pathname === '/mock/routeset-none') {
+    let body = ''; req.on('data', (c) => body += c); req.on('end', () => {
+      let planes = []; try { planes = JSON.parse(body).planes; } catch (e) { /* */ }
+      json(planes.map((p) => ({ callsign: p.callsign, airport_codes: 'unknown', _airports: [] })), { 'Access-Control-Allow-Origin': '*' });
+    }); return;
+  }
   if (u.pathname === '/mock/routeset') {
     let body = ''; req.on('data', (c) => body += c); req.on('end', () => {
       let planes = []; try { planes = JSON.parse(body).planes; } catch (e) { /* */ }

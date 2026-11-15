@@ -63,7 +63,7 @@ window.addEventListener('storage', (e) => {
     if (was) {   // stay on the same place here, wherever it now sits in the list; if the other copy removed it, go back to the start
       const i = fine.findIndex((pl) => pl.n === was.n && Math.abs(pl.lat - was.lat) < 1e-6 && Math.abs(pl.lon - was.lon) < 1e-6);
       S.center = i === -1 ? DEFAULTS.center : 'P' + i;
-      if (i === -1) applyCenter();
+      if (i === -1) applyCenter(false);
     }
     buildCenterOptions(); renderPlaces(); rebuildLabels();
   }
@@ -494,7 +494,7 @@ async function poll() {
 }
 let db = null;   // aircraft type and airline tables kept by the tar1090 map page
 async function afterFirstData() {
-  try { const r = await getJSON(dataBase + 'receiver.json'); if (r && typeof r.lat === 'number' && typeof r.lon === 'number') { home = { lat: r.lat, lon: r.lon }; buildCenterOptions(); if (S.center === 'HOME') applyCenter(); } } catch (e) { /* no home position */ }
+  try { const r = await getJSON(dataBase + 'receiver.json'); if (r && typeof r.lat === 'number' && typeof r.lon === 'number') { home = { lat: r.lat, lon: r.lon }; buildCenterOptions(); if (S.center === 'HOME') applyCenter(false); } } catch (e) { /* no home position */ }
   loadHistory();
   try {
     const v = await getJSON(tarBase + 'version.json'); const folder = tarBase + 'db-' + v.databaseVersion + '/';
@@ -551,23 +551,44 @@ function airlineName(cs) {
 }
 
 // ---------- routes and far-away positions from the internet ----------
-const ROUTE_APIS = Q.has('routeApi') ? [Q.get('routeApi')] : ['https://adsb.im/api/0/routeset', 'https://api.adsb.lol/api/0/routeset'];
+const ROUTE_APIS = Q.has('routeApi') ? Q.get('routeApi').split(',').filter(Boolean) : ['https://adsb.im/api/0/routeset', 'https://api.adsb.lol/api/0/routeset'];
 const POS_API = Q.get('posApi') || 'https://api.adsb.lol/v2/';
 const routes = new Map();
+// a route worth keeping: two or more airports, and not marked by the service as impossible for where the aircraft is
+const goodRoute = (rt) => rt && Array.isArray(rt._airports) && rt._airports.length >= 2 && rt.plausible !== false ? rt : null;
+// Each route service keeps its own table, so a flight one of them does not know is asked of the next one too.
 async function getRoute(p) {
   const cs = p.callsign(); if (!cs || !/^[A-Z]{2,3}\d/.test(cs)) return null;
   const c = routes.get(cs); if (c && nowS() < c.until) return c.route;
   routes.set(cs, { route: c ? c.route : null, until: nowS() + 30 });
   const body = JSON.stringify({ planes: [{ callsign: cs, lat: +p.rLat.toFixed(3), lng: +p.rLon.toFixed(3) }] });
+  let answered = false;
   for (const url of ROUTE_APIS) {
     try {
       const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body });
-      if (!r.ok) continue; const arr = await r.json(); const rt = Array.isArray(arr) ? arr.find((x) => x && x.callsign === cs) || arr[0] : null;
-      const good = rt && rt._airports && rt._airports.length >= 2 && rt.plausible !== false ? rt : null;
-      routes.set(cs, { route: good, until: nowS() + 6 * 3600 }); return good;
+      if (!r.ok) continue; const arr = await r.json(); if (!Array.isArray(arr)) continue; answered = true;
+      const good = goodRoute(arr.find((x) => x && x.callsign === cs) || arr[0]);
+      if (good) { routes.set(cs, { route: good, until: nowS() + 6 * 3600 }); return good; }
     } catch (e) { /* try the next service */ }
   }
+  if (answered) routes.set(cs, { route: null, until: nowS() + 600 });
   return null;
+}
+// The part of a route to show. A flight number can make stops (Los Angeles, New York, Boston), so an aircraft low to the ground
+// has to be near one of its airports, and then the leg it is on is shown: from the stop before when it is coming down, to the
+// next stop when it is climbing away. The route table is kept by volunteers and airlines reuse flight numbers, so a low
+// aircraft near none of its airports has another flight's route on file, and nothing is shown.
+function routeLeg(rt, p) {
+  const ap = rt && rt._airports; if (!ap || ap.length < 2) return null;
+  const first = ap[0], last = ap[ap.length - 1];
+  if (p.ground || p.altFt >= 6000) return [first, last];
+  let at = -1, best = 120;
+  ap.forEach((a, i) => { if (!a || !isFinite(a.lat) || !isFinite(a.lon)) return; const d = gcDist(a.lat, a.lon, p.rLat, p.rLon); if (d <= best) { best = d; at = i; } });
+  if (at === -1) return null;
+  if (ap.length === 2) return [first, last];
+  if (at > 0 && (p.vrate < -200 || at === ap.length - 1)) return [ap[at - 1], ap[at]];
+  if (at < ap.length - 1 && (p.vrate > 300 || at === 0)) return [ap[at], ap[at + 1]];
+  return [first, last];
 }
 const follow = { want: '', reg: '', hex: null, lastRemote: 0, state: 'off', since: 0, netOk: true, tour: false };   // tour: the viewer pressed A, so the followed flight waits
 // Follow has the camera only while a flight is found and the viewer has not paused it with A
@@ -860,6 +881,7 @@ function livePose(sh, t, out, ref) {
   return out;
 }
 const TP = {}, FP = {};
+function setFade(f) { const el = $('jump'); if (!el) return; const v = f.toFixed(2); if (el._v === v) return; el._v = v; el.style.opacity = v; if (f > 0) el.style.background = scene.fog.color.getStyle(); }
 const B_E = new THREE.Vector3(), B_N = new THREE.Vector3(), B_U = new THREE.Vector3(), B_M = new THREE.Matrix4(), B_Q = new THREE.Quaternion(), CAMQ = new THREE.Quaternion();
 function updateCamera(t) {
   // what to look at next
@@ -875,9 +897,21 @@ function updateCamera(t) {
     const p = shot.plane, gone = !planes.has(p.hex) || p.opacity < 0.25 || !p.fresh(t);
     if (gone || (!hold() && el > shot.dur + S.pace)) goWide();
   } else goWide();
-  const s = smooth((t - shot.t0) / shot.dur);
+  const s = smooth((t - shot.t0) / shot.dur); let fade = 0;
   if (s >= 1 || !prevShot) { livePose(shot, t, pose); prevShot = null; }
-  else {
+  else if (shot.jump) {
+    // a long move: rise, fade while crossing, come down (see applyCenter)
+    livePose(prevShot, t, FP); livePose(shot, t, TP);
+    const u = (t - shot.t0) / shot.dur, there = u >= 0.5, P = there ? TP : FP;
+    pose.lat = P.lat; pose.lon = P.lon; pose.alt = P.alt; pose.az = P.az;
+    if (calm()) { pose.dist = P.dist; pose.el = P.el; fade = clamp((0.45 - Math.abs(u - 0.5)) / 0.3, 0, 1); }
+    else {
+      const high = clamp(Math.max(FP.dist, TP.dist) * 3.5, 400, 2400), k = there ? smooth((u - 0.6) / 0.4) : smooth(u / 0.4);
+      const a = there ? high : P.dist, b = there ? P.dist : high, ea = there ? 72 : P.el, eb = there ? P.el : 72;
+      pose.dist = Math.exp(lerp(Math.log(a), Math.log(b), k)); pose.el = lerp(ea, eb, k);
+      fade = clamp((0.2 - Math.abs(u - 0.5)) / 0.1, 0, 1);   // fully faded from 0.4 to 0.6, while the camera moves across
+    }
+  } else {
     livePose(prevShot, t, FP); livePose(shot, t, TP, FP.az);
     const sf = smooth((t - shot.t0) / (shot.dur * 0.72));
     pose.lat = lerp(FP.lat, TP.lat, sf); pose.lon = lerp(FP.lon, TP.lon, sf); pose.alt = lerp(FP.alt, TP.alt, sf);
@@ -887,6 +921,7 @@ function updateCamera(t) {
     pose.dist = Math.exp(lerp(Math.log(FP.dist), Math.log(TP.dist), s)) * (1 + arc * clamp(far / 400, 0, 0.25));
     pose.el = lerp(FP.el, TP.el, s) + arc * 4;
   }
+  setFade(fade);
   if (gcDist(proj.lat0, proj.lon0, pose.lat, pose.lon) > 150) reorigin(pose.lat, pose.lon);
   // place the camera in the local east, north, up frame of the point it looks at, so moving the map origin never shows
   project(pose.lat, pose.lon, pose.alt, TV);
@@ -935,15 +970,13 @@ function updateCaption(t) {
     const own = /^[A-Z]{3}\d/.test(cs) ? cs.slice(0, 3) : '', partner = own && PAINT_AS[own] && AIRLINES[PAINT_AS[own]];
     $('c-air').textContent = partner ? partner[1] + ', operated by ' + (AIRLINES[own] ? AIRLINES[own][1] : own) : al || (cs ? '' : 'Unidentified aircraft');
     $('c-flight').textContent = cs ? (partner ? partner[0] + ' ' + cs.slice(3) : cs.replace(/^([A-Z]{3})(\d)/, '$1 $2')) : (info.reg || p.hex.toUpperCase());
-    let route = '', rt = capRoute;
-    // The route table is kept by volunteers and listed by callsign, and airlines reuse flight numbers, so it is sometimes wrong.
-    // An aircraft low to the ground has to be near one end of its route. If it is near neither, the route on file is not this flight's.
-    if (rt && !p.ground && p.altFt < 6000) { const ap = rt._airports, a = ap[0], b = ap[ap.length - 1]; if (gcDist(a.lat, a.lon, p.rLat, p.rLon) > 120 && gcDist(b.lat, b.lon, p.rLat, p.rLon) > 120) rt = null; }
-    if (!rt && !p.ground && p.altFt < 4500) {   // no route to trust, but low beside an airport: say what can be seen
+    let route = '';
+    const leg = routeLeg(capRoute, p);
+    if (!leg && !p.ground && p.altFt < 4500) {   // no route to trust, but low beside an airport: say what can be seen
       const near = nearestAirport(p.rLat, p.rLon, 32);
       if (near) route = `<span style="margin-left:0">${p.vrate < -200 ? 'Arriving at' : p.vrate > 300 ? 'Departing' : 'Near'}</span> ${esc(near[3] || near[2])} <i>${esc(near[1] || near[0])}</i>`;
     }
-    if (rt) { const ap = rt._airports, a = ap[0], b = ap[ap.length - 1]; route = `${esc(placeName(a))} <i>${esc(a.iata || a.icao)}</i> <span>to</span> ${esc(placeName(b))} <i>${esc(b.iata || b.icao)}</i>`; }
+    if (leg) { const [a, b] = leg; route = `${esc(placeName(a))} <i>${esc(a.iata || a.icao)}</i> <span>to</span> ${esc(placeName(b))} <i>${esc(b.iata || b.icao)}</i>`; }
     if ($('c-route')._h !== route) { $('c-route').innerHTML = route; $('c-route')._h = route; }
     const trend = p.vrate > 350 ? 'climbing' : p.vrate < -350 ? 'descending' : '';
     const bits = [];
@@ -954,15 +987,15 @@ function updateCaption(t) {
     if ($('c-data')._h !== h) { $('c-data').innerHTML = h; $('c-data')._h = h; }
     if (__NET__) { const mark = dataBase && S.src === 'blend' && !p.remote ? (p.tAnt && t - p.tAnt < 20 ? 'Heard by ' + ANT : 'From the flight network') : ''; const n = $('c-src'); if (n._t !== mark) { n._t = mark; n.textContent = mark; n.hidden = !mark; } }
     let prog = '';
-    if (shot.kind === 'follow' && rt) {
-      const ap = rt._airports, a = ap[0], b = ap[ap.length - 1];
+    if (shot.kind === 'follow' && leg) {
+      const [a, b] = leg;
       const done = gcDist(a.lat, a.lon, p.rLat, p.rLon), left = gcDist(p.rLat, p.rLon, b.lat, b.lon), frac = clamp(done / Math.max(done + left, 1), 0, 1);
       $('c-bar').style.width = (frac * 100).toFixed(1) + '%';
       const mins = p.gs > 60 ? (left / (p.gs * 1.852)) * 60 : null;
       prog = `${fmtInt(left / MI)} miles to go` + (mins ? `, about ${mins >= 90 ? (mins / 60).toFixed(1).replace('.0', '') + ' hours' : fmtInt(Math.max(mins, 1)) + ' minutes'}` : '');
       if (p.remote) prog += '. Beyond ' + ANT + ', position from ADSB.lol';
     } else if (shot.kind === 'follow' && p.remote) prog = 'Beyond ' + ANT + ', position from ADSB.lol';
-    $('c-prog').hidden = !(shot.kind === 'follow' && rt); $('c-progtext').textContent = prog; $('c-progtext').hidden = !prog;
+    $('c-prog').hidden = !(shot.kind === 'follow' && leg); $('c-progtext').textContent = prog; $('c-progtext').hidden = !prog;
   }
   if (show !== capShown) { capShown = show; $('cap').classList.toggle('on', show); }
   // quiet status line
@@ -1076,10 +1109,19 @@ function goPlace(item) {
   }
   save(); $('look-list').innerHTML = ''; $('f-lookq').value = ''; buildCenterOptions(); renderPlaces(); applyCenter();
 }
-function applyCenter() {
+// Moving the sky somewhere far away does not glide across the map, which can make a viewer feel sick: the camera rises out of
+// the old place, the view fades to the sky's colour while it crosses, and it comes down into the new place. With the system's
+// reduce motion setting on, it only fades. A short move still glides. byViewer is false when the page moves the sky by itself.
+const JUMP_KM = 60;
+const calm = () => !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+function applyCenter(byViewer = true) {
   if (__NET__) setTimeout(() => netTick(true), 50);
+  const from = { lat: pose.lat, lon: pose.lon };
   C = centerPoint(); reorigin(C.lat, C.lon); for (const p of planes.values()) for (const s of p.trail) s.ep = -1;
-  if (shot.kind !== 'follow') { begin('wide', 7); shot.hold = 5; hideCaption(); }
+  if (shot.kind !== 'follow') {
+    const jump = byViewer && gcDist(from.lat, from.lon, C.lat, C.lon) > JUMP_KM;
+    begin('wide', jump ? (calm() ? 3 : 8) : 7); shot.hold = 5; shot.jump = jump; hideCaption();
+  }
 }
 function initPanel() {
   buildCenterOptions();
@@ -1266,24 +1308,23 @@ async function prefetchRoutes() {
     if (want.length >= 60) break;
   }
   if (!want.length) return;
-  const body = JSON.stringify({ planes: want });
+  let left = want, answered = false;
   for (const url of ROUTE_APIS) {
     try {
+      const body = JSON.stringify({ planes: left });
       const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body }); if (!r.ok) continue;
-      const arr = await r.json(); if (!Array.isArray(arr)) continue;
+      const arr = await r.json(); if (!Array.isArray(arr)) continue; answered = true;
       const got = new Map(arr.filter((x) => x && x.callsign).map((x) => [x.callsign, x]));
-      for (const w of want) { const rt = got.get(w.callsign), good = rt && rt._airports && rt._airports.length >= 2 && rt.plausible !== false ? rt : null; routes.set(w.callsign, { route: good, until: nowS() + (good ? 6 * 3600 : 600) }); }
-      return;
+      left = left.filter((w) => { const good = goodRoute(got.get(w.callsign)); if (good) routes.set(w.callsign, { route: good, until: nowS() + 6 * 3600 }); return !good; });
+      if (!left.length) return;
     } catch (e) { /* try the next service */ }
   }
+  // flights no service knows are asked again in ten minutes
+  if (answered) for (const w of left) routes.set(w.callsign, { route: null, until: nowS() + 600 });
 }
-// a route to trust: the same guard the caption uses, so a wrong entry in the route table never turns up as a search result
-function routeOf(p) {
-  const c = routes.get(p.callsign()), rt = c && c.route; if (!rt || !rt._airports) return null;
-  const ap = rt._airports, a = ap[0], b = ap[ap.length - 1]; if (!a || !b) return null;
-  if (!p.ground && p.altFt < 6000) { if (!isFinite(a.lat) || !isFinite(a.lon) || !isFinite(b.lat) || !isFinite(b.lon)) return null; if (gcDist(a.lat, a.lon, p.rLat, p.rLon) > 120 && gcDist(b.lat, b.lon, p.rLat, p.rLon) > 120) return null; }
-  return rt;
-}
+// a route to trust, as the two airports of the leg being flown: the same guard the caption uses, so a wrong entry in the route
+// table never turns up as a search result
+function routeOf(p) { const c = routes.get(p.callsign()); return routeLeg(c && c.route, p); }
 function flightLabel(p) {
   const cs = p.callsign(); if (!cs) return p.reg || p.hex.toUpperCase();
   const own = /^[A-Z]{3}\d/.test(cs) ? cs.slice(0, 3) : '', partner = own && PAINT_AS[own] && AIRLINES[PAINT_AS[own]];
@@ -1304,7 +1345,7 @@ function typeWords(c) {
 function searchText(p) {
   const cs = p.callsign(), own = /^[A-Z]{3}\d/.test(cs) ? cs.slice(0, 3) : '', ai = own && AIRLINES[own], partner = own && PAINT_AS[own] && AIRLINES[PAINT_AS[own]];
   const rt = routeOf(p), info = p.info || {};
-  const ends = rt ? [rt._airports[0], rt._airports[rt._airports.length - 1]].map((a) => [a.iata, a.icao, a.name, a.location].join(' ')).join(' ') : '';
+  const ends = rt ? rt.map((a) => [a.iata, a.icao, a.name, a.location].join(' ')).join(' ') : '';
   const kind = p.category === 'A7' ? 'helicopter rotorcraft' : '';
   const h = [cs, ai ? ai[0] + cs.slice(3) : '', partner ? partner[0] + cs.slice(3) : '', airlineName(cs), partner ? partner[1] : '', p.reg, info.reg, p.hex, p.type, typeWords(p.type), p.desc, info.long, info.type, kind, ends].join(' ').toLowerCase();
   return h + ' ' + h.replace(/[- ]/g, '');   // also without dashes and spaces, so A320 finds A-320 and DL1234 finds DL 1234
@@ -1326,7 +1367,7 @@ function renderFind() {
     const li = document.createElement('li'), b = document.createElement('b'), s = document.createElement('small'), rt = routeOf(p), al = airlineName(p.callsign());
     b.textContent = flightLabel(p) + (al ? '  ' + al : '');
     const type = prettyType((p.info && p.info.long) || p.desc || '') || p.type || '';
-    const route = rt ? placeName(rt._airports[0]) + ' to ' + placeName(rt._airports[rt._airports.length - 1]) : (/^[A-Z]{2,3}\d/.test(p.callsign()) ? 'route not known' : '');
+    const route = rt ? placeName(rt[0]) + ' to ' + placeName(rt[1]) : (/^[A-Z]{2,3}\d/.test(p.callsign()) ? 'route not known' : '');
     s.textContent = [type, p.ground ? 'on the ground' : fmtInt(Math.round(p.altFt / 25) * 25) + ' feet', route].filter(Boolean).join('  \u00b7  ');
     li.appendChild(b); li.appendChild(s); li.id = 'find-opt-' + i; li.setAttribute('role', 'option');
     li.onmouseenter = () => markFound(i);
@@ -1397,7 +1438,7 @@ if (S.follow) setFollow(S.follow);
 if (!MANUAL) { poll(); setInterval(followTick, 1000); setInterval(watchTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
   net, NET: __NET__ };

@@ -2,7 +2,7 @@
 
 Live aircraft from a readsb or dump1090 receiver, drawn in three dimensions in a web browser. The camera glides from aircraft to aircraft, settles beside each one, then pulls back to the whole sky.
 
-New in version 3.7.1: press P for a small window with just your places; one click moves the sky there. Also fixed: a place added while the page was open in a second tab or window could be lost.
+New in version 3.7.1: press P for a small window with just your places; one click moves the sky there. Moving the sky to a far place now rises, fades and comes down instead of gliding across the map (only a fade with the system's reduce motion setting). Captions show where more flights come from, including the leg of a flight that makes a stop. Also fixed: a place added while the page was open in a second tab or window could be lost.
 
 New in version 3.7:
 

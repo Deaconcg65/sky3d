@@ -195,6 +195,44 @@ const { chromium } = require('playwright');
   const esc = await page.evaluate(() => document.getElementById('mine').hidden);
   await page.keyboard.press('p'); await page.waitForTimeout(200); await page.keyboard.press('p'); await page.waitForTimeout(200);
   ok('Escape closes My places, and so does P again', esc && await page.evaluate(() => document.getElementById('mine').hidden));
+  // ---------- version 3.7.1: where a flight comes from ----------
+  // a flight number with a stop on the way: low and coming down at New York, the caption shows the leg from Los Angeles, not Los Angeles to Boston
+  const legs = await page.evaluate(() => {
+    const L = window.__sky.routeLeg, ap = (c, lat, lon) => ({ icao: c, iata: c.slice(1), name: c, lat, lon });
+    const rt = { _airports: [ap('KLAX', 33.94, -118.41), ap('KJFK', 40.64, -73.78), ap('KBOS', 42.36, -71.01)] };
+    const at = (altFt, vrate, lat, lon) => ({ ground: false, altFt, vrate, rLat: lat, rLon: lon });
+    const names = (l) => l ? l.map((a) => a.icao).join('-') : 'none';
+    return { down: names(L(rt, at(1800, -900, 40.62, -73.85))), up: names(L(rt, at(2500, 1500, 40.66, -73.70))), high: names(L(rt, at(35000, 0, 40, -90))), lost: names(L(rt, at(2000, -800, 39.0, -77.0))) };
+  });
+  ok('a flight with a stop shows the leg it is on, and a route nowhere near is not trusted', legs.down === 'KLAX-KJFK' && legs.up === 'KJFK-KBOS' && legs.high === 'KLAX-KBOS' && legs.lost === 'none', JSON.stringify(legs));
+  // the first route service does not know a flight: the second one is asked, so its origin can still be shown
+  const rtab = await browser.newPage({ viewport: { width: 640, height: 360 } }); rtab.on('pageerror', (e) => errs.push('PAGEERROR (two route services): ' + e.message));
+  await rtab.goto(PAGE.replace('routeApi=/mock/routeset', 'routeApi=/mock/routeset-none,/mock/routeset')); await rtab.waitForTimeout(5000);
+  const asked = await rtab.evaluate(async () => {
+    const s = window.__sky; await s.prefetchRoutes(); const pre = [...s.routes.values()].filter((c) => c.route).length;
+    const p = [...s.planes.values()].find((q) => s.routes.get(q.callsign()) && s.routes.get(q.callsign()).route); s.routes.clear();
+    const one = p ? await s.getRoute(p) : null; return { pre, one: !!(one && one._airports.length >= 2) };
+  });
+  ok('when the first route service does not know a flight, the second one is asked', asked.pre > 0 && asked.one, JSON.stringify(asked));
+  await rtab.close();
+  // ---------- version 3.7.1: moving the sky far away rises, fades and comes down instead of gliding across ----------
+  await page.bringToFront();
+  const jumped = await page.evaluate(async () => {
+    const s = window.__sky, wait = (ms) => new Promise((r) => setTimeout(r, ms)), sky = document.getElementById('sky');
+    s.S.center = 'KJFK'; s.applyCenter(); await wait(9000);
+    s.S.center = 'KLAX'; s.applyCenter(); const jump = s.shot.jump, d0 = s.pose.dist, start = { lat: s.pose.lat, lon: s.pose.lon };
+    let maxFade = 0, maxDist = 0, crossedSeen = false;
+    for (let i = 0; i < 50; i++) {
+      await wait(200); const f = +getComputedStyle(document.getElementById('jump')).opacity; maxFade = Math.max(maxFade, f); maxDist = Math.max(maxDist, s.pose.dist);
+      const mid = Math.abs(s.pose.lat - start.lat) > 0.5 && Math.abs(s.pose.lat - 33.94) > 0.5;   // somewhere between New York and Los Angeles
+      if (mid && f < 0.99) crossedSeen = true;
+    }
+    const end = { lat: s.pose.lat, fade: +getComputedStyle(document.getElementById('jump')).opacity };
+    s.S.center = 'KLGA'; s.applyCenter(); const shortJump = s.shot.jump;
+    return { jump, rose: maxDist > d0 * 2, maxFade, crossedSeen, arrived: Math.abs(end.lat - 33.94) < 0.6, clear: end.fade === 0, shortJump, sky: !!sky };
+  });
+  ok('moving the sky far away rises, fades while crossing, and comes down at the new place', jumped.jump && jumped.rose && jumped.maxFade >= 0.99 && !jumped.crossedSeen && jumped.arrived && jumped.clear, JSON.stringify(jumped));
+  ok('a short move still glides without a fade', jumped.shortJump === false, JSON.stringify(jumped));
   console.log('errors:', errs.join(' ; ') || 'none');
   await browser.close();
 })();
