@@ -293,26 +293,29 @@ const { chromium } = require('playwright');
   await satPage.close();
   // a photo service that does not answer: the drawn map stays, the page says so, and it stops asking for a while
   const satBad = await browser.newPage({ viewport: { width: 960, height: 540 } }); satBad.on('pageerror', (e) => errs.push('PAGEERROR (satellite down): ' + e.message));
-  await satBad.goto(PAGE + '&sat=1&satApi=/mock/satfail/{z}/{y}/{x}.png'); await satBad.waitForTimeout(7000);
+  const badAt = Date.now(); await satBad.goto(PAGE + '&sat=1&satApi=/mock/satfail/{z}/{y}/{x}.png');
+  await satBad.waitForFunction(() => window.__sky && window.__sky.sat.down, null, { timeout: 45000 }).catch(() => {});   // a slow machine can take a while to collect 12 failures
+  const badSecs = Math.round((Date.now() - badAt) / 1000);
   const down = await satBad.evaluate(() => { const s = window.__sky; return { down: s.sat.down, failed: s.sat.failed, asked: s.sat.asked, land: s.ground.land.geometry.index ? s.ground.land.geometry.index.count : 0, landShown: s.ground.land.visible, note: document.getElementById('sat-note').textContent }; });
   await satBad.waitForTimeout(3000);
   const later = await satBad.evaluate(() => window.__sky.sat.asked);
   // five minutes on, it tries again without the view having to move (the wait is cut short here)
   const retried = await satBad.evaluate(async () => { const g = window.__sky.sat, before = g.asked; g.downUntil = 0; await new Promise((r) => setTimeout(r, 2000)); return g.asked > before; });
   ok('after the pause, the page asks the photo service again on its own', retried);
-  ok('when the photo service does not answer, the drawn map stays and the page stops asking', down.down && down.failed >= 12 && down.land > 0 && down.landShown && /not loading/.test(down.note) && later === down.asked, JSON.stringify(Object.assign(down, { later })));
+  ok('when the photo service does not answer, the drawn map stays and the page stops asking', down.down && down.failed >= 12 && down.land > 0 && down.landShown && /not loading/.test(down.note) && later === down.asked, JSON.stringify(Object.assign(down, { later, secs: badSecs })));
   await satBad.close();
   // a short outage after some photos loaded: the missing ones are asked for again, when switched off and on and a minute later by themselves
   const satSome = await browser.newPage({ viewport: { width: 960, height: 540 } }); satSome.on('pageerror', (e) => errs.push('PAGEERROR (satellite outage): ' + e.message));
-  await sim('/ctl/satsome?down=1'); await satSome.goto(PAGE + '&sat=1&satApi=/mock/satsome/{z}/{y}/{x}.png'); await satSome.waitForTimeout(7000);
+  await sim('/ctl/satsome?down=1'); await satSome.goto(PAGE + '&sat=1&satApi=/mock/satsome/{z}/{y}/{x}.png');
+  await satSome.waitForFunction(() => { const g = window.__sky && window.__sky.sat; return g && g.loaded > 0 && !g.busy && !g.queue.length && [...g.cache.values()].some((t) => t.bad); }, null, { timeout: 45000 }).catch(() => {});
   const holes = () => satSome.evaluate(() => { const g = window.__sky.sat; return { loaded: g.loaded, failed: g.failed, asked: g.asked, down: g.down, holes: [...g.cache.values()].filter((t) => t.bad && g.want.has(t.k)).length }; });
   const part = await holes();
-  const toggled = await satSome.evaluate(async () => { const s = window.__sky, before = s.sat.asked; s.S.sat = false; s.applySat(); s.S.sat = true; s.applySat(); await new Promise((r) => setTimeout(r, 2500)); return s.sat.asked - before; });
+  const toggled = await satSome.evaluate(async (need) => { const s = window.__sky, before = s.sat.asked; s.S.sat = false; s.applySat(); s.S.sat = true; s.applySat(); for (let i = 0; i < 120 && s.sat.asked - before < need; i++) await new Promise((r) => setTimeout(r, 250)); return s.sat.asked - before; }, part.holes);
   ok('photos that failed during a short outage are asked for again when the setting is switched off and on', part.loaded > 0 && part.holes > 0 && !part.down && toggled >= part.holes, JSON.stringify(Object.assign(part, { toggled })));
   await sim('/ctl/satsome?down=0');
   // a minute on, the missing photos are asked for again by themselves (the wait is cut short here)
   await satSome.evaluate(() => { const g = window.__sky.sat; for (const t of g.cache.values()) t.retry = 0; g.retryAt = 0.001; });
-  await satSome.waitForTimeout(3000);
+  await satSome.waitForFunction(() => { const g = window.__sky.sat; return ![...g.cache.values()].some((t) => t.bad && g.want.has(t.k)); }, null, { timeout: 30000 }).catch(() => {});
   const healed = await holes();
   ok('once the outage is over, the missing photos fill in on their own', healed.holes === 0 && healed.loaded > part.loaded, JSON.stringify(healed));
   await satSome.close();
