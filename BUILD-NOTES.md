@@ -20,7 +20,7 @@ A self-contained 3D web page that shows live aircraft from a home Raspberry Pi A
 
 ## Left to do, in order
 
-1. Codex reviews the branch on GitHub ("@codex review" on pull request 1; AGENTS.md gives it this file and the deliberate decisions). Findings come back to Claude to check and fix. Do not merge before Codex has no new real findings.
+1. Done November 15: Codex reviewed on GitHub four times and its review of commit f11718c had no findings. Before merging, run node tools/controls.js once on a machine with Chromium, because the checks added during the review were written but never run.
 2. Merge the pull request. Then on the Raspberry Pi, run the installer line from the README and confirm the settings window ends with "Version 3.6, network edition, November 15, 2026".
 3. Version 3.7: watch list (first entry N2RF, a Citation CJ4) and typed locations (airport, city or zip first; street addresses only with a privacy notice).
 4. Version 3.8: aircraft gallery with realistic shapes (757, Gulfstream, Airbus, Citation CJ4, helicopter), a legend page with airline and military paint, and paint options for other aircraft including silly ones.
