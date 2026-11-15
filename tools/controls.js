@@ -4,7 +4,9 @@
 const { chromium } = require('playwright');
 (async () => {
   const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } }); const errs = [];
+  // one browser context for the main page, so a second copy of the page can be opened beside it with the same saved settings
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const page = await ctx.newPage(); const errs = [];
   page.on('pageerror', (e) => errs.push('PAGEERROR: ' + e.message));
   const PAGE = 'http://localhost:8090/net/?routeApi=/mock/routeset&posApi=/mock/v2/&dpr=1&sky=day&wx=clear&netApi=/mock/v2/&placeApi=/mock/place/';
   await page.goto(PAGE);
@@ -188,7 +190,7 @@ const { chromium } = require('playwright');
   await page.keyboard.press('Escape'); await page.waitForTimeout(300);
   // ---------- version 3.7.1: My places are kept, also with the page open twice ----------
   // a second copy of the page in the same browser adds a place; the first copy then changes a setting, which used to save its old list over it
-  const tab2 = await page.context().newPage(); tab2.on('pageerror', (e) => errs.push('PAGEERROR (second copy): ' + e.message));
+  const tab2 = await ctx.newPage(); tab2.on('pageerror', (e) => errs.push('PAGEERROR (second copy): ' + e.message));
   await tab2.goto(PAGE); await tab2.waitForTimeout(4000);
   await tab2.keyboard.press('s'); await tab2.waitForTimeout(400); await tab2.fill('#f-pname', 'My House'); await tab2.fill('#f-pll', '40.6892, -74.0445'); await tab2.click('#f-places button[type=submit]'); await tab2.waitForTimeout(400); await tab2.keyboard.press('Escape');
   await page.bringToFront(); await page.waitForTimeout(500);
