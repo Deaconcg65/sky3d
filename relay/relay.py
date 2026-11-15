@@ -107,6 +107,7 @@ PLACE_RATE, PLACE_BURST = 1.0, 1          # questions a second to the place find
 PLACE_HOURLY = 200                         # and about this many an hour, so nobody can turn the relay into a heavy user of it
 PLACE_KEEP = 24 * 3600.0                   # a place found is kept this long, and the same words are not sent again meanwhile
 ROUTE_RATE, ROUTE_BURST = 0.5, 10        # questions a second to the route services, for all viewers together
+ROUTE_VIEWER_RATE, ROUTE_VIEWER_BURST = 0.25, 5   # route questions one viewer may cause, half of all, so no one viewer can use up the rest
 ROUTE_KEEP, ROUTE_NONE = 6 * 3600.0, 600.0   # a route found is kept this long; a flight no service knows is not asked about again for this long
 MAX_BODY = 8 * 1024 * 1024
 MAX_AT_ONCE = 48        # requests being answered at once
@@ -448,7 +449,7 @@ class Relay(BaseHTTPRequestHandler):
                 if len(viewers) > 4000:   # still too many: let go of the ones that have been quiet longest
                     for old in sorted(viewers, key=lambda k: viewers[k][0].t)[:1000]:
                         del viewers[old]
-            return viewers.setdefault(viewer, (Bucket(VIEWER_RATE, VIEWER_BURST), Bucket(ASK_RATE, ASK_BURST)))
+            return viewers.setdefault(viewer, (Bucket(VIEWER_RATE, VIEWER_BURST), Bucket(ASK_RATE, ASK_BURST), Bucket(ROUTE_VIEWER_RATE, ROUTE_VIEWER_BURST)))
 
     # ---------- the requests ----------
     def do_OPTIONS(self):
@@ -490,7 +491,7 @@ class Relay(BaseHTTPRequestHandler):
             return self.say(404, 'Not found')
         path = self.path.split('?', 1)[0]
         viewer, outside = self.who()
-        general, asking = self.allowances(viewer)
+        general, asking, routing = self.allowances(viewer)
         with lock:
             allowed = general.take()
         if not allowed:
@@ -528,7 +529,7 @@ class Relay(BaseHTTPRequestHandler):
             return self.send_check()
         m = ROUTES.fullmatch(path)
         if m:
-            status, body, extra = self.route_answer(m.group(1))
+            status, body, extra = self.route_answer(m.group(1), routing)
             return self.reply(status, body, extra=extra)
         m = PLACE.fullmatch(path)
         if m:
@@ -617,7 +618,7 @@ class Relay(BaseHTTPRequestHandler):
                 checked[0], checked[1] = time.monotonic(), recent
         self.reply(200, recent)
 
-    def route_answer(self, items):
+    def route_answer(self, items, routing):
         """Returns (status, text, extra headers) for up to ten flights' routes: a list with an entry for each flight that
         could be answered for, its airports empty when no service knows a route to show."""
         flights, seen = [], set()
@@ -637,6 +638,12 @@ class Relay(BaseHTTPRequestHandler):
                 else:
                     ask.append(f)
         if ask:
+            with lock:   # the viewer's own allowance first, so one viewer cannot spend what the route services allow everyone
+                may_ask = route_bucket.ready() and routing.take()
+            if not may_ask:
+                if out:
+                    return 200, json.dumps(out, separators=(',', ':')), None
+                return 503, json.dumps({'error': 'The route services have been asked as often as they may for now. Try again in a moment.'}), {'Retry-After': '4'}
             found, unknown, doubted = ask_routes(ask)
             with lock:
                 now = time.monotonic()
