@@ -2,6 +2,14 @@
 
 Live aircraft from a readsb or dump1090 receiver, drawn in three dimensions in a web browser. The camera glides from aircraft to aircraft, settles beside each one, then pulls back to the whole sky.
 
+New in version 3.6, both editions: you can take the controls. Press H in the page for the full list.
+
+- Keys. A is the auto tour, W pulls back to the whole sky, F takes the controls (fly mode), plus and minus zoom, S is the settings, L is Listen, Space holds on an aircraft. Full screen moved to Shift and F. T changes the trail length and C turns captions on or off.
+- Fly mode. Drag with the mouse to look around, use the arrow keys to move (up and down go forward and back, left and right turn, Shift with up or down climbs or descends), and use the mouse wheel or plus and minus to zoom. With no input for a while, the page goes back to the auto tour. The wait is a setting.
+- Click an aircraft to see its details for a while (a setting). Double click to zoom in and stay with it. Escape or A goes back to the auto tour.
+- Search. Press the slash key, or the Search button, and look for aircraft on screen by airline, flight number, tail number, plane type (757, A320, helicopter), origin or destination. Origins and destinations come from the volunteer route table, which has gaps, so a flight with no route on file says "route not known" and is never guessed.
+- Network edition: Milwaukee joins the list of places to center on. New York is still the default.
+
 New in version 3.5:
 
 - Sharing the page outside your house, safely. The relay is now also a front door: point a secure tunnel at it and people outside reach the 3D sky page and nothing else on the receiver. See "Sharing it outside your house" below.
