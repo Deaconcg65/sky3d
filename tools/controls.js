@@ -258,7 +258,10 @@ const { chromium } = require('playwright');
   const jumped = await page.evaluate(async () => {
     const s = window.__sky, wait = (ms) => new Promise((r) => setTimeout(r, ms)), sky = document.getElementById('sky');
     s.S.center = 'KJFK'; s.applyCenter(); await wait(9000);
-    s.S.center = 'KLGA'; s.applyCenter(); const shortJump = s.shot.jump; await wait(8000);   // Kennedy to LaGuardia is about 17 km
+    // Kennedy to LaGuardia is about 17 km: a new wide shot starts, with no jump and no fade at any point
+    const shotBefore = s.shot; s.S.center = 'KLGA'; s.applyCenter();
+    const short = { started: s.shot !== shotBefore, kind: s.shot.kind, jump: s.shot.jump, maxFade: 0 };
+    for (let i = 0; i < 40; i++) { await wait(200); short.maxFade = Math.max(short.maxFade, +getComputedStyle(document.getElementById('jump')).opacity); }
     s.S.center = 'KLAX'; s.applyCenter(); const jump = s.shot.jump, d0 = s.pose.dist, start = { lat: s.pose.lat, lon: s.pose.lon };
     let maxFade = 0, maxDist = 0, crossedSeen = false, early = false;
     for (let i = 0; i < 50; i++) {
@@ -268,10 +271,10 @@ const { chromium } = require('playwright');
       if (maxFade < 0.99 && Math.abs(s.pose.lat - 33.94) < 0.6) early = true;   // at the new place before the view had faded
     }
     const end = { lat: s.pose.lat, fade: +getComputedStyle(document.getElementById('jump')).opacity };
-    return { jump, rose: maxDist > d0 * 2, maxFade, crossedSeen, early, arrived: Math.abs(end.lat - 33.94) < 0.6, clear: end.fade === 0, shortJump, sky: !!sky };
+    return { jump, rose: maxDist > d0 * 2, maxFade, crossedSeen, early, arrived: Math.abs(end.lat - 33.94) < 0.6, clear: end.fade === 0, short, sky: !!sky };
   });
-  ok('moving the sky far away rises, fades while crossing, and comes down at the new place', jumped.jump && jumped.rose && jumped.maxFade >= 0.99 && !jumped.crossedSeen && !jumped.early && jumped.arrived && jumped.clear, JSON.stringify(jumped));
-  ok('a short move still glides without a fade', jumped.shortJump === false, JSON.stringify(jumped));
+  { const far = Object.assign({}, jumped); delete far.short; ok('moving the sky far away rises, fades while crossing, and comes down at the new place', far.jump && far.rose && far.maxFade >= 0.99 && !far.crossedSeen && !far.early && far.arrived && far.clear, JSON.stringify(far)); }
+  ok('a short move still glides without a fade', jumped.short.started && jumped.short.kind === 'wide' && jumped.short.jump === false && jumped.short.maxFade === 0, JSON.stringify(jumped.short));
   console.log('errors:', errs.join(' ; ') || 'none');
   await browser.close();
 })();
