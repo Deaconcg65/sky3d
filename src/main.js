@@ -546,6 +546,7 @@ function parseFlight(s) {
 function setFollow(text) {
   follow.tour = false; follow.want = parseFlight(text); follow.hex = null; follow.state = follow.want ? 'looking' : 'off'; follow.since = nowS(); follow.lastRemote = 0;
   S.follow = follow.want; save(); $('f-flight').value = follow.want; $('f-stop').hidden = !follow.want;
+  if (follow.want && (shot.lock || shot.kind === 'fly')) leaveControls();   // a flight the viewer asks to follow takes the camera from a locked aircraft or fly mode
 
 }
 function matchFollow() {

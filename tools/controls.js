@@ -82,6 +82,12 @@ const { chromium } = require('playwright');
   // the same after fly mode
   await page.keyboard.press('f'); await page.waitForTimeout(200); await page.keyboard.press(' '); await page.keyboard.press('Escape'); await page.waitForTimeout(300);
   ok('Escape from fly mode clears the hold', await page.evaluate(() => !window.__sky.paused && window.__sky.shot.kind === 'wide'));
+  // a new Follow takes the camera from a locked aircraft (Codex review of 4b6cb9d)
+  const two = await page.evaluate(() => { const s = window.__sky; const ps = [...s.planes.values()].filter((q) => q.lat !== null && q.opacity > 0.5 && q.callsign() && !q.remote); s.lockOn(ps[0]); s.setFollow(ps[1].callsign()); return [ps[0].callsign(), ps[1].callsign(), s.shot.lock]; });
+  await page.waitForTimeout(16000);
+  const k5 = await page.evaluate(() => ({ kind: window.__sky.shot.kind, lock: window.__sky.shot.lock, plane: window.__sky.shot.plane && window.__sky.shot.plane.callsign() }));
+  ok('a new Follow releases a locked aircraft', !two[2] && k5.kind === 'follow' && k5.plane === two[1], JSON.stringify({ two, k5 }));
+  await page.evaluate(() => window.__sky.setFollow(''));
   console.log('errors:', errs.join(' ; ') || 'none');
   await browser.close();
 })();
