@@ -76,6 +76,16 @@ function snapshot(T, opts = {}) {
 }
 const strip = (a) => { const o = Object.assign({}, a); delete o._route; delete o._type; return o; };
 const AIRPORTS = JSON.parse(fs.readFileSync(path.join(root, 'build/airports.json'), 'utf8')); const AP = {}; for (const a of AIRPORTS) AP[a[0]] = a;
+// a 16 by 16 green PNG, made here so the simulator needs no image files
+let satAsked = 0, satSomeDown = true;
+const SAT_PNG = (() => {
+  const crcT = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; crcT[n] = c >>> 0; }
+  const crc = (b) => { let c = 0xffffffff; for (const x of b) c = crcT[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+  const chunk = (type, data) => { const len = Buffer.alloc(4); len.writeUInt32BE(data.length); const td = Buffer.concat([Buffer.from(type), data]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([len, td, c]); };
+  const W = 16, ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(W, 0); ihdr.writeUInt32BE(W, 4); ihdr[8] = 8; ihdr[9] = 2;
+  const rows = []; for (let y = 0; y < W; y++) { rows.push(0); for (let x = 0; x < W; x++) rows.push(60, 140, 70); }
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(Buffer.from(rows))), chunk('IEND', Buffer.alloc(0))]);
+})();
 const apObj = (id) => { const a = AP[id]; return a ? { name: a[2], icao: a[0], iata: a[1], location: a[3], lat: a[4], lon: a[5], countryiso2: 'US' } : null; };
 // one far flight for follow tests: Atlanta to Boston, somewhere over Virginia
 function farFlight(T) {
@@ -131,6 +141,15 @@ http.createServer((req, res) => {
     const files = []; for (let back = spans[0]; back > spans[1]; back -= 8) { const t = T - back; files.push({ now: +t.toFixed(1), messages: 1, aircraft: snapshot(t).map((a) => [a.hex, a.alt_baro, a.gs, a.track, a.lat, a.lon, a.seen_pos, a.type, a.flight, a.messages]) }); }
     return json(zlib.gzipSync(JSON.stringify({ files })), { 'Content-Encoding': 'gzip' });
   }
+  // satellite photo tiles for the page checks (version 3.8): a small green square for any tile, or nothing at all from satfail
+  if (u.pathname.startsWith('/mock/sat/')) { satAsked++; res.writeHead(200, { 'Content-Type': 'image/png', 'Access-Control-Allow-Origin': '*' }); return res.end(SAT_PNG); }
+  if (u.pathname.startsWith('/mock/satsome/')) {   // a photo service with a short outage: tiles with an odd x fail until /ctl/satsome?down=0
+    satAsked++; const x = parseInt(u.pathname.split('/').pop(), 10);
+    if (satSomeDown && x % 2) { res.writeHead(503, { 'Access-Control-Allow-Origin': '*' }); return res.end(); }
+    res.writeHead(200, { 'Content-Type': 'image/png', 'Access-Control-Allow-Origin': '*' }); return res.end(SAT_PNG);
+  }
+  if (u.pathname === '/ctl/satsome') { satSomeDown = u.searchParams.get('down') !== '0'; return json({ satSomeDown }); }
+  if (u.pathname.startsWith('/mock/satfail/')) { res.writeHead(404, { 'Access-Control-Allow-Origin': '*' }); return res.end(); }
   // a route service that knows no flights at all: the page must then ask the next service (version 3.7.1)
   if (u.pathname === '/mock/routeset-none') {
     let body = ''; req.on('data', (c) => body += c); req.on('end', () => {

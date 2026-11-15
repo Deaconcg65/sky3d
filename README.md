@@ -2,6 +2,8 @@
 
 Live aircraft from a readsb or dump1090 receiver, drawn in three dimensions in a web browser. The camera glides from aircraft to aircraft, settles beside each one, then pulls back to the whole sky.
 
+New in version 3.8: satellite photos on the ground, switched on in the settings with "Satellite photos on the ground". The photos are EOxCloudless (Sentinel-2) pictures, free for personal, non-commercial use. Each viewer's browser fetches them straight from EOX, so the receiver does no extra work. Where a photo has not loaded, the drawn map shows as before.
+
 New in version 3.7.1: press P for a small window with just your places; one click moves the sky there. Moving the sky to a far place now rises, fades and comes down instead of gliding across the map (only a fade with the system's reduce motion setting). Captions show where more flights come from, including the leg of a flight that makes a stop. To add one of My places, type an address, a city or a latitude and longitude, then pick the right answer; it is looked up the same way as Find a place. Also fixed: a place added while the page was open in a second tab or window could be lost, and a note could say a place would be forgotten after Keep my places was ticked.
 
 New in version 3.7:
@@ -134,6 +136,8 @@ Nothing from your antenna is sent anywhere, in either edition. These lookups go 
 - Network edition only, the watch list: each tail number or flight number on it, asked about by the relay on your receiver, one at a time, each about every two minutes, and never while the page already sees it.
 - Network edition only, Find a place: the words you typed, sent by the relay on your receiver to nominatim.openstreetmap.org when you press Enter or Find. Airport codes are found on the page and sent nowhere. If you type a street address, that address is what is sent. Your position is never sent with it.
 - The weather for the place on screen, from api.open-meteo.com. Only a position rounded to a quarter of a degree (about 17 miles) is sent. Choose "Always clear" under Weather in the settings to switch this off.
+
+- Only with "Satellite photos on the ground" switched on (it is off to start): photo tiles of the area on screen, fetched by the viewer's own browser from tiles.maps.eox.at, not through the receiver. The tiles asked for show EOX roughly which area is on screen, down to a few miles when close in, including around one of your places when the sky is centered on it.
 
 Your own places ("My House" and the like) are never sent anywhere by name or by exact position. Centering the sky on one sends only the rounded positions described above.
 

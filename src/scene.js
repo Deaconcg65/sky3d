@@ -242,6 +242,101 @@ export class Ground {
   }
 }
 
+// ---------- satellite ground (version 3.8, off unless the viewer switches it on) ----------
+// Photo tiles laid over the drawn ground around the spot on screen: a fine level near the middle and a coarse one around it.
+// The viewer's own browser fetches them straight from the photo service; nothing goes through the receiver. While a tile is
+// loading, or if the service does not answer, the drawn ground underneath shows, so the page never goes blank.
+const tileLon = (x, z) => (x / 2 ** z) * 360 - 180;
+const tileLat = (y, z) => Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / 2 ** z))) / D2R;
+const lonTile = (lon, z) => ((lon + 180) / 360) * 2 ** z;
+const latTile = (lat, z) => { const r = clamp(lat, -85, 85) * D2R; return ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * 2 ** z; };
+export class SatGround {
+  constructor(scene, url, renderer) {
+    this.url = url; this.group = new THREE.Group(); this.group.visible = false; scene.add(this.group);
+    this.cache = new Map(); this.want = new Set(); this.queue = []; this.busy = 0; this.MAX = 140; this.on = false;
+    this.asked = 0; this.loaded = 0; this.failed = 0; this.down = false; this.downUntil = 0; this.retryAt = 0; this.key = '';
+    this.tint = new THREE.Color(1, 1, 1); this.aniso = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    this.loader = new THREE.TextureLoader(); this.loader.setCrossOrigin('anonymous');
+    this.v = new THREE.Vector3();
+  }
+  setOn(on) {
+    this.on = !!on; this.group.visible = this.on; this.queue.length = 0; this.key = '';
+    if (this.on) { this.retryAt = 0; for (const t of this.cache.values()) t.bad = false; }   // switched on again: every missing photo gets another try
+  }
+  setTint(c) { this.tint.copy(c); for (const t of this.cache.values()) if (t.mesh) t.mesh.material.color.copy(c); }
+  shown() { let n = 0; for (const t of this.cache.values()) if (t.mesh && t.mesh.visible) n++; return n; }
+  // lat, lon: the spot the camera looks at; spanKm: about how much ground is in view around it; now: seconds
+  update(lat, lon, spanKm, now) {
+    if (!this.on) return;
+    // a photo that failed is asked for again a minute later, if it is still wanted, so a short outage does not leave holes for good
+    const clock = performance.now() / 1000;
+    if (this.retryAt && clock > this.retryAt) {
+      this.retryAt = 0; this.key = '';
+      for (const t of this.cache.values()) if (t.bad) { if (t.retry <= clock) t.bad = false; else this.retryAt = this.retryAt ? Math.min(this.retryAt, t.retry) : t.retry; }
+    }
+    if (this.down && performance.now() / 1000 > this.downUntil) { this.down = false; this.failed = 0; this.key = ''; for (const [k, t] of this.cache) if (t.bad) this.cache.delete(k); }   // try again, even if the view has not moved
+    const wide = Math.max(Math.cos(lat * D2R), 0.2) * 40075;
+    const zf = clamp(Math.floor(Math.log2(wide / (spanKm / 6))), 4, 13), zc = Math.max(zf - 2, 2);
+    // each level: its zoom, the tile under the spot, how many tiles out from it, and its draw order (fine over coarse)
+    const levels = [[zf, spanKm, 2.6], [zc, spanKm * 3, 2.5]].map(([z, span, order]) => ({ z, order, cx: lonTile(lon, z), cy: latTile(lat, z), r: Math.ceil(span / 2 / (wide / 2 ** z)) }));
+    const key = levels.map((L) => L.z + ':' + Math.floor(L.cx * 4) + ':' + Math.floor(L.cy * 4) + ':' + L.r).join('/') + ':' + proj.epoch;
+    if (key === this.key) return; this.key = key;
+    const want = new Set(); this.want = want; this.queue.length = 0;
+    for (const { z, order, cx, cy, r } of levels) {
+      const n = 2 ** z;
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+        const x = (((Math.floor(cx) + dx) % n) + n) % n, y = Math.floor(cy) + dy; if (y < 0 || y >= n) continue;
+        const k = z + '/' + x + '/' + y; want.add(k);
+        let t = this.cache.get(k);
+        if (!t) { t = { z, x, y, k, order, mesh: null, bad: false, loading: false, ep: -1, used: now }; this.cache.set(k, t); }
+        t.order = order; if (t.mesh) t.mesh.renderOrder = order;   // a tile can be the fine level one moment and the coarse one the next
+        t.used = now; t.d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy) + (z === zc ? -0.5 : 0);   // the coarse level comes first, so the whole view fills in quickly
+        if (t.mesh) { if (t.ep !== proj.epoch) this.place(t); }
+        else if (!t.bad && !t.loading && !this.down) this.queue.push(t);
+      }
+    }
+    for (const t of this.cache.values()) if (t.mesh) t.mesh.visible = want.has(t.k);
+    this.queue.sort((a, b) => a.d - b.d);
+    // keep the most recently wanted tiles and let go of the rest
+    if (this.cache.size > this.MAX) {
+      const old = [...this.cache.values()].filter((t) => !want.has(t.k) && !t.loading).sort((a, b) => a.used - b.used);
+      for (const t of old.slice(0, this.cache.size - this.MAX)) this.drop(t);
+    }
+    this.pump();
+  }
+  pump() {
+    while (this.busy < 6 && this.queue.length && this.on && !this.down) {
+      const t = this.queue.shift(); if (t.mesh || t.loading || t.bad) continue;
+      t.loading = true; this.busy++; this.asked++;
+      const src = this.url.replace('{z}', t.z).replace('{x}', t.x).replace('{y}', t.y);
+      this.loader.load(src, (tex) => {
+        t.loading = false; this.busy--; this.loaded++;
+        if (!this.cache.has(t.k)) { tex.dispose(); this.pump(); return; }
+        tex.anisotropy = this.aniso; tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+        const mat = new THREE.MeshBasicMaterial({ map: tex, color: this.tint, depthTest: false, depthWrite: false, fog: true, side: THREE.DoubleSide });
+        t.mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat); t.mesh.renderOrder = t.order; t.mesh.frustumCulled = false;
+        this.place(t); this.group.add(t.mesh); t.mesh.visible = this.want.has(t.k); this.pump();
+      }, undefined, () => {
+        t.loading = false; t.bad = true; this.busy--; this.failed++;
+        t.retry = performance.now() / 1000 + 60; if (!this.retryAt || t.retry < this.retryAt) this.retryAt = t.retry;
+        // a service that answers nothing at all is left alone for five minutes, and the drawn ground stays
+        if (this.failed >= 12 && this.loaded === 0) { this.down = true; this.downUntil = performance.now() / 1000 + 300; this.queue.length = 0; }
+        this.pump();
+      });
+    }
+  }
+  place(t) {
+    const N = 8, pos = [], uv = [], idx = [], v = this.v;
+    for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) {
+      project(tileLat(t.y + j / N, t.z), tileLon(t.x + i / N, t.z), 0, v); pos.push(v.x, v.y, v.z); uv.push(i / N, 1 - j / N);
+    }
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const a = j * (N + 1) + i, b = a + 1, c = a + N + 1, d = c + 1; idx.push(a, c, b, b, c, d); }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx);
+    t.mesh.geometry.dispose(); t.mesh.geometry = g; t.ep = proj.epoch;
+  }
+  drop(t) { if (t.mesh) { this.group.remove(t.mesh); t.mesh.geometry.dispose(); t.mesh.material.map.dispose(); t.mesh.material.dispose(); } this.cache.delete(t.k); }
+}
+
 // ---------- sky dome with sun glow and stars ----------
 export class Sky {
   constructor(scene) {

@@ -1,7 +1,7 @@
 // 3D sky channel. One page that reads the aircraft list from a readsb or dump1090 receiver and flies a camera through it.
 import * as THREE from 'three';
 import { R_EARTH, FT, KT, MI, D2R, clamp, lerp, smooth, angDiff, lerpAng, gcDist, bearing, sunPosition, sunTimes, fmtInt, prettyType } from './util.js';
-import { VEX, proj, setOrigin, project, localFrame, Segments, Ground, Sky, WeatherLayer, PlaneMesh, modelFor, makeLabel } from './scene.js';
+import { VEX, proj, setOrigin, project, localFrame, Segments, Ground, Sky, WeatherLayer, PlaneMesh, modelFor, makeLabel, SatGround } from './scene.js';
 import { AIRLINES, IATA2ICAO, PAINT_AS, paintFor } from './airlines.js';
 
 const Q = new URLSearchParams(location.search);
@@ -19,7 +19,7 @@ const PRESETS = [
 ];
 if (__NET__) PRESETS.push(['KBOS', 'Boston'], ['KMKE', 'Milwaukee'], ['KPHL', 'Philadelphia'], ['KDCA', 'Washington National'], ['KATL', 'Atlanta'], ['KMIA', 'Miami'], ['KORD', 'Chicago O\'Hare'], ['KDFW', 'Dallas Fort Worth'],
   ['KDEN', 'Denver'], ['KLAX', 'Los Angeles'], ['KSFO', 'San Francisco'], ['KSEA', 'Seattle']);
-const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr', src: 'blend', relay: '', netmax: 130, clickSecs: 15, flyBack: 30, places: [], keep: null, watch: null, watchSound: true, watchNote: false };
+const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr', src: 'blend', relay: '', netmax: 130, clickSecs: 15, flyBack: 30, places: [], keep: null, watch: null, watchSound: true, watchNote: false, sat: false };
 // SHARED: the page was opened at a secure web address, which is how a receiver is shared with people outside the house.
 // At home it is opened at the receiver's own plain address.
 const SHARED = Q.has('shared') ? Q.get('shared') !== '0' : location.protocol === 'https:';
@@ -112,6 +112,11 @@ const sky = new Sky(scene);
 const weather = new WeatherLayer();
 setOrigin(C.lat, C.lon);
 const ground = new Ground(scene, GEO, AIRPORTS);
+// Version 3.8: satellite photos on the ground, off unless the viewer switches them on. EOxCloudless (Sentinel-2) tiles are free
+// for personal, non-commercial use with the credit line shown, and need no key. The viewer's browser fetches them itself.
+const SAT_API = Q.get('satApi') || 'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g/{z}/{y}/{x}.jpg';
+const sat = new SatGround(scene, SAT_API, renderer);
+const DAY_LAND = new THREE.Color(0x7f9a78), SAT_TINT = new THREE.Color(); let satK = -1, satT = -100;
 const trails = new Segments(60000, { width: 2.2, color: 0xffffff, opacity: 1, depthTest: true, renderOrder: 8 });
 const drops = new Segments(600, { width: 1.0, color: 0xffffff, opacity: 1, depthTest: true, renderOrder: 7 });
 scene.add(trails.mesh); scene.add(drops.mesh);
@@ -189,6 +194,10 @@ function updateLook(lat, lon, date) {
   sky.starU.opacity.value = look.stars;
   scene.fog.color.copy(look.haze);
   ground.waterMat.color.copy(look.water); ground.landMat.color.copy(look.land);
+  { // the photos darken with the drawn land at dusk and at night
+    const lum = (c) => c.r * 0.3 + c.g * 0.59 + c.b * 0.11, k = Math.round(clamp(lum(look.land) / lum(DAY_LAND), 0.05, 1.15) * 100) / 100;
+    if (k !== satK) { satK = k; sat.setTint(SAT_TINT.setScalar(k)); }
+  }
   ground.coast.mat.uniforms.color.value.copy(look.coast); ground.coast.mat.uniforms.opacity.value = look.coastA;
   ground.borders.mat.uniforms.color.value.copy(look.coast); ground.borders.mat.uniforms.opacity.value = look.coastA * 0.22;
   ground.runways.mat.uniforms.color.value.copy(look.runway);
@@ -1170,6 +1179,7 @@ function initPanel() {
   $('f-sky').onchange = (e) => { S.sky = e.target.value; save(); };
   $('f-wx').onchange = (e) => { S.wx = e.target.value; save(); if (S.wx === 'real') setWeather({}); applyWeather(); updateCorner(simClock || new Date()); };
   $('f-corner').onchange = (e) => { S.corner = e.target.checked; save(); };
+  $('f-sat').checked = !!S.sat; $('f-sat').onchange = (e) => { S.sat = e.target.checked; save(); applySat(); };
   $('f-lights').onchange = (e) => { S.lights = e.target.value; save(); };
   if (__NET__) $('f-relay').onchange = (e) => { S.relay = e.target.value.trim(); save(); net.i = 0; net.fails = 0; net.ok = null; net.lastGood = -1e9; netTick(true); };
   if (__NET__) $('f-netmax').onchange = (e) => { S.netmax = +e.target.value; save(); netTick(true); };
@@ -1430,12 +1440,18 @@ function togglePanel(on) {
 let fpsN = 0, fpsT = nowS(), slow = 0; const bootT = nowS();
 let renderNext = true, lastT = nowS(), lookT = -100, simClock = Q.has('time') ? new Date(Q.get('time')) : null;
 const A3 = new THREE.Vector3();
+function applySat() { sat.setOn(S.sat); $('satcredit').hidden = !S.sat; satT = -100; satNote(); }
+function satNote() {
+  const n = $('sat-note'), text = S.sat && sat.down ? 'The satellite photos are not loading right now, so the drawn map is shown. The page tries again in a few minutes.' : 'Photos from EOxCloudless (Sentinel-2), loaded by this browser straight from EOX, not through the receiver. EOX can see which area is on screen. Free for personal, non-commercial use.';
+  if (n._t !== text) { n._t = text; n.textContent = text; }
+}
 function frame() {
   const t = nowS(), dt = clamp(t - lastT, 0.001, 0.25); lastT = t;
   flyStep(dt); updateCamera(t);
   const date = simClock || new Date();
   updateLook(pose.lat, pose.lon, date); updateWeather(t, dt);
-  if (t - lookT > 2) { lookT = t; applyWeather(); updateCorner(date); updateListen(); }
+  if (t - lookT > 2) { lookT = t; applyWeather(); updateCorner(date); updateListen(); satNote(); }
+  if (S.sat && t - satT > 0.5) { satT = t; sat.update(pose.lat, pose.lon, clamp(pose.dist * 3, 30, 600), t); }
   sky.starU.time.value = t;
   trails.reset(); drops.reset();
   const trailSec = S.trail * 60;
@@ -1471,12 +1487,12 @@ function frame() {
 }
 
 // ---------- start ----------
-resize(); reorigin(C.lat, C.lon); applyWeather(); updateLook(C.lat, C.lon, simClock || new Date()); initPanel();
+resize(); reorigin(C.lat, C.lon); applyWeather(); updateLook(C.lat, C.lon, simClock || new Date()); initPanel(); applySat();
 if (S.follow) setFollow(S.follow);
 if (!MANUAL) { poll(); setInterval(followTick, 1000); setInterval(watchTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
   net, NET: __NET__ };

@@ -280,6 +280,54 @@ const { chromium } = require('playwright');
   });
   { const far = Object.assign({}, jumped); delete far.short; ok('moving the sky far away rises, fades while crossing, and comes down at the new place', far.jump && far.rose && far.maxFade >= 0.99 && !far.crossedSeen && !far.early && far.arrived && far.clear, JSON.stringify(far)); }
   ok('a short move still glides without a fade', jumped.short.started && jumped.short.kind === 'wide' && jumped.short.jump === false && jumped.short.maxFade === 0, JSON.stringify(jumped.short));
+  // ---------- version 3.8: satellite photos on the ground ----------
+  // off by default: no photo is asked for and no credit line shows
+  const satPage = await browser.newPage({ viewport: { width: 960, height: 540 } }); satPage.on('pageerror', (e) => errs.push('PAGEERROR (satellite): ' + e.message));
+  await satPage.goto(PAGE + '&satApi=/mock/sat/{z}/{y}/{x}.png'); await satPage.waitForTimeout(4000);
+  const satOff = await satPage.evaluate(() => ({ on: window.__sky.S.sat, asked: window.__sky.sat.asked, credit: !document.getElementById('satcredit').hidden }));
+  ok('satellite photos are off to start, and nothing is asked for', satOff.on === false && satOff.asked === 0 && !satOff.credit, JSON.stringify(satOff));
+  await satPage.keyboard.press('s'); await satPage.waitForTimeout(400); await satPage.click('#f-sat'); await satPage.keyboard.press('Escape'); await satPage.waitForTimeout(5000);
+  const satOn = await satPage.evaluate(() => { const s = window.__sky; return { on: s.S.sat, saved: JSON.parse(localStorage.getItem('sky3d') || '{}').sat, loaded: s.sat.loaded, shown: s.sat.shown(), cached: s.sat.cache.size, credit: !document.getElementById('satcredit').hidden, link: document.querySelector('#satcredit a').href }; });
+  ok('switched on, photos load around the view and the credit line shows', satOn.on && satOn.saved === true && satOn.loaded > 10 && satOn.shown > 10 && satOn.cached <= 140 && satOn.credit && /cloudless\.eox\.at/.test(satOn.link), JSON.stringify(satOn));
+  // zooming out over the same spot widens the set of photos wanted
+  const widen = await satPage.evaluate(() => { const g = window.__sky.sat, t = performance.now() / 1000; g.update(40.7, -73.83, 100, t); const a = g.want.size; g.update(40.7, -73.83, 150, t); return { a, b: g.want.size }; });
+  ok('zooming out over the same spot asks for the wider ring of photos', widen.b > widen.a, JSON.stringify(widen));
+  // moving the sky far away fetches photos for the new place too
+  const satMoved = await satPage.evaluate(async () => { const s = window.__sky, before = s.sat.loaded; s.S.center = 'KBOS'; s.applyCenter(); await new Promise((r) => setTimeout(r, 11000)); return { more: s.sat.loaded - before, shown: s.sat.shown(), cached: s.sat.cache.size }; });
+  ok('after moving to another place, photos load there, and old ones are let go', satMoved.more > 0 && satMoved.shown > 10 && satMoved.cached <= 140, JSON.stringify(satMoved));
+  await satPage.keyboard.press('s'); await satPage.waitForTimeout(400); await satPage.click('#f-sat'); await satPage.keyboard.press('Escape'); await satPage.waitForTimeout(800);
+  const satOff2 = await satPage.evaluate(() => ({ on: window.__sky.S.sat, visible: window.__sky.sat.group.visible, credit: !document.getElementById('satcredit').hidden }));
+  ok('switched off again, the photos and the credit line go away', !satOff2.on && !satOff2.visible && !satOff2.credit, JSON.stringify(satOff2));
+  await satPage.close();
+  // a photo service that does not answer: the drawn map stays, the page says so, and it stops asking for a while
+  const satBad = await browser.newPage({ viewport: { width: 960, height: 540 } }); satBad.on('pageerror', (e) => errs.push('PAGEERROR (satellite down): ' + e.message));
+  const badAt = Date.now(); await satBad.goto(PAGE + '&sat=1&satApi=/mock/satfail/{z}/{y}/{x}.png');
+  // a slow machine can take a while to collect 12 failures, and the note under the setting is refreshed every 2 seconds
+  await satBad.waitForFunction(() => window.__sky && window.__sky.sat.down && /not loading/.test(document.getElementById('sat-note').textContent), null, { timeout: 45000 }).catch(() => {});
+  const badSecs = Math.round((Date.now() - badAt) / 1000);
+  const down = await satBad.evaluate(() => { const s = window.__sky; return { down: s.sat.down, failed: s.sat.failed, asked: s.sat.asked, land: s.ground.land.geometry.index ? s.ground.land.geometry.index.count : 0, landShown: s.ground.land.visible, note: document.getElementById('sat-note').textContent }; });
+  await satBad.waitForTimeout(3000);
+  const later = await satBad.evaluate(() => window.__sky.sat.asked);
+  // five minutes on, it tries again without the view having to move (the wait is cut short here)
+  const retried = await satBad.evaluate(async () => { const g = window.__sky.sat, before = g.asked; g.downUntil = 0; await new Promise((r) => setTimeout(r, 2000)); return g.asked > before; });
+  ok('after the pause, the page asks the photo service again on its own', retried);
+  ok('when the photo service does not answer, the drawn map stays and the page stops asking', down.down && down.failed >= 12 && down.land > 0 && down.landShown && /not loading/.test(down.note) && later === down.asked, JSON.stringify(Object.assign(down, { later, secs: badSecs })));
+  await satBad.close();
+  // a short outage after some photos loaded: the missing ones are asked for again, when switched off and on and a minute later by themselves
+  const satSome = await browser.newPage({ viewport: { width: 960, height: 540 } }); satSome.on('pageerror', (e) => errs.push('PAGEERROR (satellite outage): ' + e.message));
+  await sim('/ctl/satsome?down=1'); await satSome.goto(PAGE + '&sat=1&satApi=/mock/satsome/{z}/{y}/{x}.png');
+  await satSome.waitForFunction(() => { const g = window.__sky && window.__sky.sat; return g && g.loaded > 0 && !g.busy && !g.queue.length && [...g.cache.values()].some((t) => t.bad); }, null, { timeout: 45000 }).catch(() => {});
+  const holes = () => satSome.evaluate(() => { const g = window.__sky.sat; return { loaded: g.loaded, failed: g.failed, asked: g.asked, down: g.down, holes: [...g.cache.values()].filter((t) => t.bad && g.want.has(t.k)).length }; });
+  const part = await holes();
+  const toggled = await satSome.evaluate(async (need) => { const s = window.__sky, before = s.sat.asked; s.S.sat = false; s.applySat(); s.S.sat = true; s.applySat(); for (let i = 0; i < 120 && s.sat.asked - before < need; i++) await new Promise((r) => setTimeout(r, 250)); return s.sat.asked - before; }, part.holes);
+  ok('photos that failed during a short outage are asked for again when the setting is switched off and on', part.loaded > 0 && part.holes > 0 && !part.down && toggled >= part.holes, JSON.stringify(Object.assign(part, { toggled })));
+  await sim('/ctl/satsome?down=0');
+  // a minute on, the missing photos are asked for again by themselves (the wait is cut short here)
+  await satSome.evaluate(() => { const g = window.__sky.sat; for (const t of g.cache.values()) t.retry = 0; g.retryAt = 0.001; });
+  await satSome.waitForFunction(() => { const g = window.__sky.sat; return ![...g.cache.values()].some((t) => t.bad && g.want.has(t.k)); }, null, { timeout: 30000 }).catch(() => {});
+  const healed = await holes();
+  ok('once the outage is over, the missing photos fill in on their own', healed.holes === 0 && healed.loaded > part.loaded, JSON.stringify(healed));
+  await satSome.close();
   console.log('errors:', errs.join(' ; ') || 'none');
   await browser.close();
 })();

@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3.7.1, /*EDITION*/.
+  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3.8, /*EDITION*/.
   One self-contained page. Put it on the receiver's web server and open it in a browser.
   Includes three.js (c) 2010-2024 three.js authors, MIT License.
   Shorelines: GSHHG (Wessel and Smith, LGPL) and Natural Earth (public domain). State lines: United States Census Bureau.
@@ -51,6 +51,8 @@ body.awake #listen { opacity: 1; pointer-events: auto; } body.panel #listen { op
   font: 500 15px var(--face); color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 10px 18px; cursor: pointer; }
 body.awake #findbtn { opacity: 1; pointer-events: auto; } body.panel #findbtn { opacity: 0; pointer-events: none; }
 #findbtn:focus-visible { outline: 2px solid var(--lamp); outline-offset: 2px; }
+#satcredit { position: fixed; left: 1.2vw; bottom: 0.8vh; z-index: 2; font-size: 11px; color: rgba(255,255,255,0.78); text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
+#satcredit a { color: inherit; }
 #jump { position: fixed; inset: 0; z-index: 1; opacity: 0; pointer-events: none; background: #a9c8de; }
 #pick { position: fixed; left: 0; top: 0; width: 56px; height: 56px; margin: -28px 0 0 -28px; border: 2px solid var(--lamp); border-radius: 50%; pointer-events: none; z-index: 3; box-shadow: 0 0 16px rgba(255,208,138,0.55); }
 #find, #mine { position: fixed; left: 50%; top: 4vh; max-height: 92vh; display: flex; flex-direction: column; transform: translateX(-50%); width: min(580px, 92vw); z-index: 7; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px;
@@ -110,6 +112,7 @@ body.shared #panel .home-only { display: none; }
 <body>
 <canvas id="sky" aria-label="Live aircraft over the area, drawn in three dimensions"></canvas>
 <div id="jump" aria-hidden="true"></div>
+<div id="satcredit" hidden>Satellite photos: <a href="https://cloudless.eox.at" target="_blank" rel="noopener">EOxCloudless 2025</a> by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2025)</div>
 <div id="cap" aria-live="polite">
   <div id="c-air"></div>
   <div id="c-flight"></div>
@@ -240,10 +243,12 @@ body.shared #panel .home-only { display: none; }
 
   <label class="check"><input id="f-cap" type="checkbox"> Show the caption for each aircraft</label>
   <label class="check"><input id="f-corner" type="checkbox"> Show the time, sun and weather in the corner</label>
+  <label class="check"><input id="f-sat" type="checkbox"> Satellite photos on the ground</label>
+  <div class="note" id="sat-note"></div>
 
   <hr>
   <dl id="keys-dl"></dl>
-  <p class="note" style="margin-top:22px">Version 3.7.1, /*EDITION*/, November 15, 2026</p>
+  <p class="note" style="margin-top:22px">Version 3.8, /*EDITION*/, November 15, 2026</p>
 </aside>
 <script type="application/json" id="geo-data">/*GEO*/</script>
 <script type="application/json" id="airport-data">/*AIRPORTS*/</script>
