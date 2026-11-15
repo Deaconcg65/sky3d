@@ -274,10 +274,12 @@ def post_routes(url, flights):
 
 
 def ask_routes(flights):
-    """Ask the route services about some flights, given as (callsign, latitude, longitude). Returns (found, unknown):
-    the routes found by callsign, and the callsigns a service answered for without a route to show. A flight in neither
-    was not answered for. Only the callsigns and positions are sent."""
-    found, unknown, answered = {}, set(), False
+    """Ask the route services about some flights, given as (callsign, latitude, longitude). Returns (found, unknown,
+    doubted): the routes found by callsign, the callsigns a service answered for with no route at all, and the callsigns
+    whose route a service judged impossible for the position given. A flight in none of these was not answered for.
+    Only "unknown" may be remembered by callsign alone: "doubted" depends on the position the asker sent, and anyone
+    can send any position. Only the callsigns and positions are sent."""
+    found, unknown, doubted, answered = {}, set(), set(), False
     left = list(flights)
     for _, url in ROUTE_SERVICES:
         if not left:
@@ -293,9 +295,12 @@ def ask_routes(flights):
             r = route_of(got.get(c))
             if r:
                 found[c] = r
+                doubted.discard(c)
+            elif route_of(got.get(c), judged=False):
+                doubted.add(c)   # the service has a route, but not one this position fits
         left = [f for f in left if f[0] not in found]
     if answered:
-        unknown.update(c for c, _, _ in left)
+        unknown.update(c for c, _, _ in left if c not in doubted)
     elif STANDING:
         for c, _, _ in left[:4]:   # neither service answered: read the route table itself, a few flights at a time
             if not re.fullmatch(r'[A-Z]{2,3}[0-9][A-Z0-9]{0,4}', c, A):
@@ -316,7 +321,7 @@ def ask_routes(flights):
                 found[c] = r
             else:
                 unknown.add(c)
-    return found, unknown
+    return found, unknown, doubted
 
 
 def from_web(path):
@@ -632,7 +637,7 @@ class Relay(BaseHTTPRequestHandler):
                 else:
                     ask.append(f)
         if ask:
-            found, unknown = ask_routes(ask)
+            found, unknown, doubted = ask_routes(ask)
             with lock:
                 now = time.monotonic()
                 if len(routes_kept) > 5000:
@@ -646,6 +651,8 @@ class Relay(BaseHTTPRequestHandler):
                     out.append(dict(r, callsign=c))
                 for c in unknown:
                     routes_kept[c] = (now, None)
+                    out.append({'callsign': c, '_airports': []})
+                for c in doubted:   # answered for this asker only, and not remembered, so a wrong position cannot hide a route from others
                     out.append({'callsign': c, '_airports': []})
         if not out:
             return 502, json.dumps({'error': 'The route services did not answer.'}), None
