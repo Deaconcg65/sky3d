@@ -175,6 +175,12 @@ const { chromium } = require('playwright');
   await tab2.reload(); await tab2.waitForTimeout(4000);
   const kept = await tab2.evaluate(() => ({ keep: window.__sky.S.keep, places: window.__sky.S.places.map((p) => p.n), stored: (JSON.parse(localStorage.getItem('sky3d') || '{}').places || []).map((p) => p.n), ticked: document.getElementById('f-keep').checked }));
   ok('My places are still there after the page is opened again, here at the receiver\'s own address', kept.keep === true && kept.ticked && kept.places.includes('My House') && kept.places.includes('Fairfield') && kept.stored.includes('My House'), JSON.stringify(kept));
+  // removing a watched aircraft in the other copy clears its alert here too, so adding it back alerts again
+  const wsync = await page.evaluate(async () => { const s = window.__sky; s.S.watch = ['N2RF', 'N7XX']; s.watchState.set('N7XX', { seenAt: performance.now() / 1000, where: null, asked: 0, netOk: true, alerted: true }); s.dismissWatch('N7XX'); return true; });
+  await tab2.evaluate(() => { const o = JSON.parse(localStorage.getItem('sky3d')); o.watch = ['N2RF']; localStorage.setItem('sky3d', JSON.stringify(o)); });
+  await page.waitForTimeout(400);
+  const wafter = await page.evaluate(() => ({ list: window.__sky.S.watch, state: window.__sky.watchState.has('N7XX'), row: !!document.querySelector('#watch .w-row[data-key="N7XX"]') }));
+  ok('a watched aircraft removed in another copy is cleared here too', wsync && wafter.list.join() === 'N2RF' && !wafter.state && !wafter.row, JSON.stringify(wafter));
   await tab2.close();
   // ---------- version 3.7.1: P opens My places ----------
   await page.bringToFront(); await page.keyboard.press('p'); await page.waitForTimeout(300);

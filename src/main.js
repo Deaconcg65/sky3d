@@ -67,7 +67,11 @@ window.addEventListener('storage', (e) => {
     }
     buildCenterOptions(); renderPlaces(); rebuildLabels();
   }
-  if (Array.isArray(o.watch)) { S.watch = [...new Set(o.watch.map(watchKey).filter(Boolean))].slice(0, WATCH_MAX); renderWatch(); }
+  if (Array.isArray(o.watch)) {
+    const next = [...new Set(o.watch.map(watchKey).filter(Boolean))].slice(0, WATCH_MAX);
+    for (const key of watchList()) if (next.indexOf(key) === -1) { watchState.delete(key); dismissWatch(key); }   // removed in the other copy: clear it here as Remove does
+    S.watch = next; renderWatch();
+  }
 });
 let home = null;   // receiver position, if the receiver has one set
 // Reads a latitude and longitude as copied from Google Maps (40.6892, -74.0445) or Google Earth (40°41'21"N 74°02'40"W).
