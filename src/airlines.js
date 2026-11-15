@@ -7,7 +7,7 @@ export const AIRLINES = {
   VXP: ['XP', 'Avelo Airlines', 0x5b2d8e], RPA: ['YX', 'Republic Airways', 0x8a94a0], EDV: ['9E', 'Endeavor Air', 0xc8102e],
   ENY: ['MQ', 'Envoy Air', 0x2a6ebb], JIA: ['OH', 'PSA Airlines', 0x2a6ebb], PDT: ['PT', 'Piedmont Airlines', 0x2a6ebb],
   SKW: ['OO', 'SkyWest Airlines', 0x7a8793], ASH: ['YV', 'Mesa Airlines', 0x7a8793], GJS: ['G7', 'GoJet Airlines', 0x1b4f9c],
-  UCA: ['C5', 'CommuteAir', 0x1b4f9c], KAP: ['9K', 'Cape Air', 0x1c75bc], FDX: ['FX', 'FedEx', 0x4d148c], UPS: ['5X', 'UPS', 0x5a3a1e],
+  UCA: ['C5', 'CommuteAir', 0x1b4f9c], QXE: ['QX', 'Horizon Air', 0x0b3d5b], KAP: ['9K', 'Cape Air', 0x1c75bc], FDX: ['FX', 'FedEx', 0x4d148c], UPS: ['5X', 'UPS', 0x5a3a1e],
   GTI: ['5Y', 'Atlas Air', 0x1b3a6b], ABX: ['GB', 'ABX Air', 0x8a94a0], ATN: ['8C', 'Air Transport International', 0x8a94a0],
   ACA: ['AC', 'Air Canada', 0xd22630], JZA: ['QK', 'Jazz', 0xd22630], WJA: ['WS', 'WestJet', 0x00a9a5], POE: ['PD', 'Porter Airlines', 0x1d3557],
   BAW: ['BA', 'British Airways', 0x1d3f7a], VIR: ['VS', 'Virgin Atlantic', 0xc8102e], EIN: ['EI', 'Aer Lingus', 0x008a5e],
@@ -86,9 +86,29 @@ export const LIVERY = {
   TAM: { aft: 0x1b1464, eng: 0x1b1464, tail: [0x1b1464, 0x1b1464, 0xed1650] },
 };
 LIVERY.LAN = LIVERY.TAM;
-// Regional airlines that always fly in one partner's colours. Republic, SkyWest and Mesa fly for several airlines and the
-// callsign does not say which, so they stay neutral.
-export const PAINT_AS = { EDV: 'DAL', ENY: 'AAL', JIA: 'AAL', PDT: 'AAL', GJS: 'UAL', UCA: 'UAL', JZA: 'ACA' };
+// Regional airlines that always fly in one partner's colours.
+export const PAINT_AS = { EDV: 'DAL', ENY: 'AAL', JIA: 'AAL', PDT: 'AAL', GJS: 'UAL', UCA: 'UAL', JZA: 'ACA', QXE: 'ASA' };
+// Regional airlines that fly for several partners (version 3.10). The callsign does not say which, but the flight number is
+// the partner's own (RPA5604 is sold as Delta 5604), and nearly every such flight starts or ends at one of the partner's hubs.
+// So when only one of the operator's partners has a hub at either end of the route, that partner is named. Otherwise the
+// caption says the airline is flying for a partner, and the paint stays neutral.
+export const PARTNERS = { RPA: ['AAL', 'DAL', 'UAL'], SKW: ['AAL', 'DAL', 'UAL', 'ASA'], ASH: ['UAL'] };
+export const HUBS = {
+  AAL: ['CLT', 'DFW', 'ORD', 'MIA', 'PHL', 'PHX', 'DCA', 'LGA', 'JFK', 'LAX'],
+  DAL: ['ATL', 'DTW', 'MSP', 'SLC', 'SEA', 'LAX', 'JFK', 'LGA', 'BOS'],
+  UAL: ['EWR', 'IAD', 'ORD', 'DEN', 'IAH', 'SFO', 'LAX'],
+  ASA: ['SEA', 'PDX', 'ANC'],
+};
+// The partner a regional flight is sold under: { key } when known, { some: true } when it flies for a partner not known here,
+// or null for an airline that flies under its own name. leg is the route being flown, as two airports, when one is known.
+export function partnerOf(cs, leg) {
+  const own = /^[A-Z]{3}\d/.test(cs || '') ? cs.slice(0, 3) : '';
+  if (!own) return null;
+  if (PAINT_AS[own] && AIRLINES[PAINT_AS[own]]) return { key: PAINT_AS[own] };
+  const list = PARTNERS[own]; if (!list) return null;
+  if (leg) { const ends = leg.map((a) => a && a.iata).filter(Boolean), fit = list.filter((k) => ends.some((c) => HUBS[k].indexOf(c) !== -1)); if (fit.length === 1) return { key: fit[0] }; }
+  return { some: true };
+}
 const GA = [0xb5202e, 0x1f4e8c, 0x7a1f2b, 0x1f6a4c, 0x1c1c1c, 0xc46a1b];   // small private aircraft: white with one trim colour
 
 // The list of colours for one aircraft, in the order of ZONES in scene.js.

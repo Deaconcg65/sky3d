@@ -430,6 +430,12 @@ const { chromium } = require('playwright');
     return { asked: ps.length, got, n };
   });
   ok('with a relay beside the page, routes are asked of the relay and not of the route services directly', viaRelay.asked > 0 && viaRelay.got.some(Boolean) && viaRelay.n.relay >= viaRelay.asked && viaRelay.n.direct === 0, JSON.stringify(viaRelay));
+  // ---------- version 3.10: regional airlines under their partner's name, and altitudes near the ground ----------
+  const regional = await page.evaluate(() => { const f = window.__sky.partnerOf, ap = (a, b) => [{ iata: a }, { iata: b }], k = (x) => (x ? x.key || (x.some ? 'some' : '?') : 'own');
+    return { rpaBos: k(f('RPA5604', ap('MEM', 'BOS'))), rpaNone: k(f('RPA5604', null)), rpaLga: k(f('RPA4400', ap('LGA', 'ROC'))), skwDen: k(f('SKW3000', ap('DEN', 'BIL'))), skwSea: k(f('SKW3000', ap('SEA', 'GEG'))), edv: k(f('EDV5000', null)), qxe: k(f('QXE2100', null)), dal: k(f('DAL1311', ap('PBI', 'ATL'))), tail: k(f('N345MG', null)) }; });
+  ok('a regional airline that flies for several partners is named for the one whose hub is on its route, and otherwise flies for a partner', regional.rpaBos === 'DAL' && regional.rpaNone === 'some' && regional.rpaLga === 'some' && regional.skwDen === 'UAL' && regional.skwSea === 'some' && regional.edv === 'DAL' && regional.qxe === 'ASA' && regional.dal === 'own' && regional.tail === 'own', JSON.stringify(regional));
+  const low = await page.evaluate(() => { const w = window.__sky.altWords; return { neg: w(false, -150, 25), low: w(false, 75, 25), up: w(false, 2450, 25), ground: w(true, 0, 25) }; });
+  ok('an aircraft reading below zero or within 100 feet of it is near the ground, not at minus so many feet', low.neg === 'near the ground' && low.low === 'near the ground' && low.up === '2,450 feet' && low.ground === 'on the ground', JSON.stringify(low));
   await rel.close(); await page.bringToFront();
   // ---------- version 3.8: satellite photos on the ground ----------
   // off by default: no photo is asked for and no credit line shows
