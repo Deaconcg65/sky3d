@@ -4,9 +4,12 @@
 const { chromium } = require('playwright');
 (async () => {
   const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } }); const errs = [];
+  // one browser context for the main page, so a second copy of the page can be opened beside it with the same saved settings
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const page = await ctx.newPage(); const errs = [];
   page.on('pageerror', (e) => errs.push('PAGEERROR: ' + e.message));
-  await page.goto('http://localhost:8090/net/?routeApi=/mock/routeset&posApi=/mock/v2/&dpr=1&sky=day&wx=clear&netApi=/mock/v2/&placeApi=/mock/place/');
+  const PAGE = 'http://localhost:8090/net/?routeApi=/mock/routeset&posApi=/mock/v2/&dpr=1&sky=day&wx=clear&netApi=/mock/v2/&placeApi=/mock/place/';
+  await page.goto(PAGE);
   const kind = () => page.evaluate(() => window.__sky.shot.kind);
   const ok = (label, cond, extra = '') => console.log((cond ? 'PASS ' : 'FAIL ') + label + (extra ? '  ' + extra : ''));
   await page.waitForTimeout(7000);
@@ -161,7 +164,122 @@ const { chromium } = require('playwright');
   ok('Go there on an airport centers the sky on it', await page.evaluate(() => window.__sky.S.center === 'KJFK'));
   await page.fill('#f-lookq', 'zzzz nowhere'); await page.press('#f-lookq', 'Enter'); await page.waitForTimeout(600);
   ok('nothing found says so', /Nothing found/.test(await page.evaluate(() => document.getElementById('look-note').textContent)));
+  // ---------- version 3.7.1: My places takes an address, and the notes follow Keep my places ----------
+  const q1 = await placeAsked(), n1 = await page.evaluate(() => window.__sky.S.places.length);
+  await page.fill('#f-pname', 'Home'); await page.fill('#f-pll', 'Sunset Hill Rd, Redding, CT'); await page.click('#f-places button[type=submit]'); await page.waitForTimeout(800);
+  const addr = await page.evaluate(() => ({ rows: document.querySelectorAll('#pll-list .place').length, adds: [...document.querySelectorAll('#pll-list button')].map((b) => b.textContent), note: document.getElementById('places-note').textContent, n: window.__sky.S.places.length }));
+  ok('an address in the second My places box is looked up and the answers are listed to pick from', (await placeAsked()) === q1 + 1 && addr.rows === 3 && addr.adds.every((t) => t === 'Add') && /as Home/.test(addr.note) && addr.n === n1, JSON.stringify(addr));
+  const q2 = await placeAsked(); await page.fill('#f-pll', '12 Route 7, Redding, CT'); await page.click('#f-places button[type=submit]'); await page.waitForTimeout(600);
+  const num = await page.evaluate(() => ({ rows: document.querySelectorAll('#pll-list .place').length, n: window.__sky.S.places.length }));
+  ok('an address with two numbers in it is looked up, not read as a latitude and longitude', (await placeAsked()) === q2 + 1 && num.rows === 3 && num.n === n1, JSON.stringify(num));
+  await page.click('#pll-list .place:nth-child(2) button'); await page.waitForTimeout(400);
+  const home = await page.evaluate(() => { const s = window.__sky.S, pl = s.places.find((x) => x.n === 'Home'); return { pl, rows: document.querySelectorAll('#pll-list .place').length, name: document.getElementById('f-pname').value, where: document.getElementById('f-pll').value, note: document.getElementById('places-note').textContent }; });
+  ok('Add puts the picked answer in My places under the typed name', home.pl && Math.abs(home.pl.lat - 38.2494) < 1e-4 && home.rows === 0 && !home.name && !home.where && /^Home added\. It is kept on this device only\.$/.test(home.note), JSON.stringify(home));
+  await page.fill('#f-pname', 'Fairfield CT'); await page.fill('#f-pll', ''); await page.click('#f-places button[type=submit]'); await page.waitForTimeout(500);
+  await page.click('#pll-list .place:nth-child(1) button'); await page.waitForTimeout(300);
+  const twice = await page.evaluate(() => ({ note: document.getElementById('places-note').textContent, n: window.__sky.S.places.filter((x) => Math.abs(x.lat - 41.1414) < 1e-3).length }));
+  ok('an address typed in the name box alone is looked up too, and a place already in the list is not added twice', /already in My places as Fairfield/.test(twice.note) && twice.n === 1, JSON.stringify(twice));
+  await page.fill('#f-pname', ''); await page.fill('#f-lookq', 'fairfield ct'); await page.press('#f-lookq', 'Enter'); await page.waitForTimeout(500);
+  await page.click('#look-list .place:nth-child(3) button'); await page.waitForTimeout(400);
+  const kn = [await page.evaluate(() => document.getElementById('look-note').textContent)];
+  await page.click('#f-keep'); await page.waitForTimeout(200); kn.push(await page.evaluate(() => document.getElementById('look-note').textContent));
+  await page.click('#f-keep'); await page.waitForTimeout(200); kn.push(await page.evaluate(() => ({ note: document.getElementById('look-note').textContent, keep: window.__sky.S.keep, ticked: document.getElementById('f-keep').checked })));
+  ok('the note under Find a place changes when Keep my places is unticked and ticked again', /kept on this device only\.$/.test(kn[0]) && /until you close this page\.$/.test(kn[1]) && /kept on this device only\.$/.test(kn[2].note) && kn[2].keep === true && kn[2].ticked, JSON.stringify(kn));
+  for (let k = 0; k < 2; k++) { await page.evaluate(() => { const b = [...document.querySelectorAll('#places button')].find((x) => /^Remove (Home|<img)/.test(x.getAttribute('aria-label') || '')); if (b) b.click(); }); await page.waitForTimeout(300); }   // one at a time: the list is drawn again after each Remove
+  ok('the places added for these checks are removed again', await page.evaluate((n) => window.__sky.S.places.length === n, n1));
   await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+  // ---------- version 3.7.1: My places are kept, also with the page open twice ----------
+  // a second copy of the page in the same browser adds a place; the first copy then changes a setting, which used to save its old list over it
+  const tab2 = await ctx.newPage(); tab2.on('pageerror', (e) => errs.push('PAGEERROR (second copy): ' + e.message));
+  await tab2.goto(PAGE); await tab2.waitForTimeout(4000);
+  await tab2.keyboard.press('s'); await tab2.waitForTimeout(400); await tab2.fill('#f-pname', 'My House'); await tab2.fill('#f-pll', '40.6892, -74.0445'); await tab2.click('#f-places button[type=submit]'); await tab2.waitForTimeout(400); await tab2.keyboard.press('Escape');
+  await page.bringToFront(); await page.waitForTimeout(500);
+  const first = await page.evaluate(() => ({ places: window.__sky.S.places.map((p) => p.n), shown: [...document.querySelectorAll('#places .place span')].map((x) => x.firstChild.textContent) }));
+  ok('a place added in another copy of the page shows up in this one', first.places.includes('My House') && first.places.includes('Fairfield') && first.shown.includes('My House'), JSON.stringify(first));
+  await page.keyboard.press('c'); await page.waitForTimeout(200); await page.keyboard.press('c'); await page.waitForTimeout(300);
+  await tab2.reload(); await tab2.waitForTimeout(4000);
+  const kept = await tab2.evaluate(() => ({ keep: window.__sky.S.keep, places: window.__sky.S.places.map((p) => p.n), stored: (JSON.parse(localStorage.getItem('sky3d') || '{}').places || []).map((p) => p.n), ticked: document.getElementById('f-keep').checked }));
+  ok('My places are still there after the page is opened again, here at the receiver\'s own address', kept.keep === true && kept.ticked && kept.places.includes('My House') && kept.places.includes('Fairfield') && kept.stored.includes('My House'), JSON.stringify(kept));
+  // removing a watched aircraft in the other copy clears its alert here too, so adding it back alerts again
+  const wsync = await page.evaluate(async () => { const s = window.__sky; s.S.watch = ['N2RF', 'N7XX']; s.watchState.set('N7XX', { seenAt: performance.now() / 1000, where: null, asked: 0, netOk: true, alerted: true }); s.dismissWatch('N7XX'); const o = JSON.parse(localStorage.getItem('sky3d') || '{}'); o.watch = ['N2RF', 'N7XX']; localStorage.setItem('sky3d', JSON.stringify(o)); return true; });   // stored too, so the other copy's write below is a real change and the browser tells this copy
+  await tab2.evaluate(() => { const o = JSON.parse(localStorage.getItem('sky3d')); o.watch = ['N2RF']; localStorage.setItem('sky3d', JSON.stringify(o)); });
+  await page.waitForTimeout(400);
+  const wafter = await page.evaluate(() => ({ list: window.__sky.S.watch, state: window.__sky.watchState.has('N7XX'), row: !!document.querySelector('#watch .w-row[data-key="N7XX"]') }));
+  ok('a watched aircraft removed in another copy is cleared here too', wsync && wafter.list.join() === 'N2RF' && !wafter.state && !wafter.row, JSON.stringify(wafter));
+  await tab2.close();
+  // ---------- version 3.7.1: P opens My places ----------
+  await page.bringToFront(); await page.keyboard.press('p'); await page.waitForTimeout(300);
+  const mine = await page.evaluate(() => ({ open: !document.getElementById('mine').hidden, names: [...document.querySelectorAll('#mine-list button')].map((b) => b.textContent), help: [...document.querySelectorAll('#help-dl dt')].some((d) => d.textContent === 'P') }));
+  ok('P opens a window with just my places, and the help lists P', mine.open && mine.names.length === 2 && mine.names.some((n) => /^Fairfield/.test(n)) && mine.names.some((n) => /^My House/.test(n)) && mine.help, JSON.stringify(mine));
+  await page.keyboard.down('ArrowUp'); await page.waitForTimeout(400); await page.keyboard.up('ArrowUp');
+  ok('with My places open, the arrow keys do not steer', await page.evaluate(() => window.__sky.shot.kind !== 'fly' && !window.__sky.held.size));
+  await page.click('#mine-list button:has-text("My House")'); await page.waitForTimeout(600);
+  const moved = await page.evaluate(() => { const s = window.__sky.S, i = /^P\d+$/.test(s.center) ? +s.center.slice(1) : -1; return { closed: document.getElementById('mine').hidden, center: s.center, name: i >= 0 && s.places[i].n, picked: document.getElementById('f-center').value }; });
+  ok('one click on a place closes the window and moves the sky there', moved.closed && moved.name === 'My House' && moved.picked === moved.center, JSON.stringify(moved));
+  await page.keyboard.press('p'); await page.waitForTimeout(200); await page.keyboard.press('Escape'); await page.waitForTimeout(200);
+  const esc = await page.evaluate(() => document.getElementById('mine').hidden);
+  await page.keyboard.press('p'); await page.waitForTimeout(200); await page.keyboard.press('p'); await page.waitForTimeout(200);
+  ok('Escape closes My places, and so does P again', esc && await page.evaluate(() => document.getElementById('mine').hidden));
+  // the Search button stays on screen; pressing it with My places open swaps one window for the other
+  await page.keyboard.press('p'); await page.waitForTimeout(200); await page.evaluate(() => document.getElementById('findbtn').click()); await page.waitForTimeout(300);
+  const swap = await page.evaluate(() => ({ mine: !document.getElementById('mine').hidden, find: !document.getElementById('find').hidden, typing: document.activeElement === document.getElementById('find-q') }));
+  await page.keyboard.press('Escape'); await page.waitForTimeout(200);
+  ok('Search with My places open closes My places and opens search, ready to type', !swap.mine && swap.find && swap.typing, JSON.stringify(swap));
+  // My places open while another copy removes a place: the window shows the new list, and each button still goes to the place it names
+  const synced = await page.evaluate(async () => {
+    const s = window.__sky, wait = (ms) => new Promise((r) => setTimeout(r, ms)); s.openMine(); await wait(200);
+    const before = [...document.querySelectorAll('#mine-list button')].map((b) => b.textContent);
+    const o = JSON.parse(localStorage.getItem('sky3d')); const left = o.places.filter((p) => p.n !== 'Fairfield');
+    window.dispatchEvent(new StorageEvent('storage', { key: 'sky3d', newValue: JSON.stringify(Object.assign({}, o, { places: left })) }));
+    await wait(200);
+    const after = [...document.querySelectorAll('#mine-list button')].map((b) => b.textContent);
+    const btn = [...document.querySelectorAll('#mine-list button')].find((b) => /^My House/.test(b.textContent)); if (btn) btn.click(); await wait(300);
+    const i = /^P\d+$/.test(s.S.center) ? +s.S.center.slice(1) : -1;
+    return { before, after, went: i >= 0 && s.S.places[i] && s.S.places[i].n, closed: document.getElementById('mine').hidden };
+  });
+  ok('My places open while another copy removes a place shows the new list, and its buttons still go where they say', synced.before.length === 2 && synced.after.length === 1 && synced.went === 'My House' && synced.closed, JSON.stringify(synced));
+  // ---------- version 3.7.1: where a flight comes from ----------
+  // a flight number with a stop on the way: low and coming down at New York, the caption shows the leg from Los Angeles, not Los Angeles to Boston
+  const legs = await page.evaluate(() => {
+    const L = window.__sky.routeLeg, ap = (c, lat, lon) => ({ icao: c, iata: c.slice(1), name: c, lat, lon });
+    const rt = { _airports: [ap('KLAX', 33.94, -118.41), ap('KJFK', 40.64, -73.78), ap('KBOS', 42.36, -71.01)] };
+    const at = (altFt, vrate, lat, lon) => ({ ground: false, altFt, vrate, rLat: lat, rLon: lon });
+    const names = (l) => l ? l.map((a) => a.icao).join('-') : 'none';
+    return { down: names(L(rt, at(1800, -900, 40.62, -73.85))), up: names(L(rt, at(2500, 1500, 40.66, -73.70))), high: names(L(rt, at(35000, 0, 40, -90))), lost: names(L(rt, at(2000, -800, 39.0, -77.0))), broken: names(L({ _airports: [null, ap('KJFK', 40.64, -73.78)] }, at(35000, 0, 40, -90))) };
+  });
+  ok('a flight with a stop shows the leg it is on, and a route nowhere near is not trusted', legs.down === 'KLAX-KJFK' && legs.up === 'KJFK-KBOS' && legs.high === 'KLAX-KBOS' && legs.lost === 'none' && legs.broken === 'none', JSON.stringify(legs));
+  // the first route service does not know a flight: the second one is asked, so its origin can still be shown
+  const rtab = await browser.newPage({ viewport: { width: 640, height: 360 } }); rtab.on('pageerror', (e) => errs.push('PAGEERROR (two route services): ' + e.message));
+  await rtab.goto(PAGE.replace('routeApi=/mock/routeset', 'routeApi=/mock/routeset-none,/mock/routeset')); await rtab.waitForTimeout(5000);
+  const asked = await rtab.evaluate(async () => {
+    const s = window.__sky; await s.prefetchRoutes(); const pre = [...s.routes.values()].filter((c) => c.route).length;
+    const p = [...s.planes.values()].find((q) => s.routes.get(q.callsign()) && s.routes.get(q.callsign()).route); s.routes.clear();
+    const one = p ? await s.getRoute(p) : null; return { pre, one: !!(one && one._airports.length >= 2) };
+  });
+  ok('when the first route service does not know a flight, the second one is asked', asked.pre > 0 && asked.one, JSON.stringify(asked));
+  await rtab.close();
+  // ---------- version 3.7.1: moving the sky far away rises, fades and comes down instead of gliding across ----------
+  await page.bringToFront();
+  const jumped = await page.evaluate(async () => {
+    const s = window.__sky, wait = (ms) => new Promise((r) => setTimeout(r, ms)), sky = document.getElementById('sky');
+    s.S.center = 'KJFK'; s.applyCenter(); await wait(9000);
+    // Kennedy to LaGuardia is about 17 km: a new wide shot starts, with no jump and no fade at any point
+    const shotBefore = s.shot; s.S.center = 'KLGA'; s.applyCenter();
+    const short = { started: s.shot !== shotBefore, kind: s.shot.kind, jump: s.shot.jump, maxFade: 0 };
+    for (let i = 0; i < 40; i++) { await wait(200); short.maxFade = Math.max(short.maxFade, +getComputedStyle(document.getElementById('jump')).opacity); }
+    s.S.center = 'KLAX'; s.applyCenter(); const jump = s.shot.jump, d0 = s.pose.dist, start = { lat: s.pose.lat, lon: s.pose.lon };
+    let maxFade = 0, maxDist = 0, crossedSeen = false, early = false;
+    for (let i = 0; i < 50; i++) {
+      await wait(200); const f = +getComputedStyle(document.getElementById('jump')).opacity; maxFade = Math.max(maxFade, f); maxDist = Math.max(maxDist, s.pose.dist);
+      const mid = Math.abs(s.pose.lat - start.lat) > 0.5 && Math.abs(s.pose.lat - 33.94) > 0.5;   // somewhere between New York and Los Angeles
+      if (mid && f < 0.99) crossedSeen = true;
+      if (maxFade < 0.99 && Math.abs(s.pose.lat - 33.94) < 0.6) early = true;   // at the new place before the view had faded
+    }
+    const end = { lat: s.pose.lat, fade: +getComputedStyle(document.getElementById('jump')).opacity };
+    return { jump, rose: maxDist > d0 * 2, maxFade, crossedSeen, early, arrived: Math.abs(end.lat - 33.94) < 0.6, clear: end.fade === 0, short, sky: !!sky };
+  });
+  { const far = Object.assign({}, jumped); delete far.short; ok('moving the sky far away rises, fades while crossing, and comes down at the new place', far.jump && far.rose && far.maxFade >= 0.99 && !far.crossedSeen && !far.early && far.arrived && far.clear, JSON.stringify(far)); }
+  ok('a short move still glides without a fade', jumped.short.started && jumped.short.kind === 'wide' && jumped.short.jump === false && jumped.short.maxFade === 0, JSON.stringify(jumped.short));
   console.log('errors:', errs.join(' ; ') || 'none');
   await browser.close();
 })();

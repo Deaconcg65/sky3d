@@ -48,6 +48,31 @@ const save = () => {
     localStorage.setItem('sky3d', JSON.stringify(out));
   } catch (e) { /* ignore */ }
 };
+// Version 3.7.1: every copy of this page open in the same browser (another tab or window) keeps its own settings in memory and
+// saves all of them at once, so a copy opened earlier used to write its old list of places over a place just added in another
+// one. Each copy now takes in what another copy saved to the lists that grow, My places and the watch list, as it happens.
+window.addEventListener('storage', (e) => {
+  if (e.key !== 'sky3d' || !e.newValue) return;
+  let o; try { o = JSON.parse(e.newValue); } catch (err) { return; }
+  if (!o || typeof o !== 'object') return;
+  if (typeof o.keep === 'boolean' && o.keep !== S.keep && !Q.has('keep')) { S.keep = o.keep; $('f-keep').checked = S.keep; keepNotes(); }
+  if (S.keep && Array.isArray(o.places)) {
+    const fine = o.places.filter((pl) => pl && typeof pl.n === 'string' && Number.isFinite(pl.lat) && Number.isFinite(pl.lon)).slice(0, 20);
+    const was = /^P\d+$/.test(S.center) ? placeList()[+S.center.slice(1)] : null;
+    S.places = fine;
+    if (was) {   // stay on the same place here, wherever it now sits in the list; if the other copy removed it, go back to the start
+      const i = fine.findIndex((pl) => pl.n === was.n && Math.abs(pl.lat - was.lat) < 1e-6 && Math.abs(pl.lon - was.lon) < 1e-6);
+      S.center = i === -1 ? DEFAULTS.center : 'P' + i;
+      if (i === -1) applyCenter(false);
+    }
+    buildCenterOptions(); renderPlaces(); rebuildLabels(); if (!$('mine').hidden) renderMine();
+  }
+  if (Array.isArray(o.watch)) {
+    const next = [...new Set(o.watch.map(watchKey).filter(Boolean))].slice(0, WATCH_MAX);
+    for (const key of watchList()) if (next.indexOf(key) === -1) { watchState.delete(key); dismissWatch(key); }   // removed in the other copy: clear it here as Remove does
+    S.watch = next; renderWatch();
+  }
+});
 let home = null;   // receiver position, if the receiver has one set
 // Reads a latitude and longitude as copied from Google Maps (40.6892, -74.0445) or Google Earth (40°41'21"N 74°02'40"W).
 function parseLatLon(text) {
@@ -469,7 +494,7 @@ async function poll() {
 }
 let db = null;   // aircraft type and airline tables kept by the tar1090 map page
 async function afterFirstData() {
-  try { const r = await getJSON(dataBase + 'receiver.json'); if (r && typeof r.lat === 'number' && typeof r.lon === 'number') { home = { lat: r.lat, lon: r.lon }; buildCenterOptions(); if (S.center === 'HOME') applyCenter(); } } catch (e) { /* no home position */ }
+  try { const r = await getJSON(dataBase + 'receiver.json'); if (r && typeof r.lat === 'number' && typeof r.lon === 'number') { home = { lat: r.lat, lon: r.lon }; buildCenterOptions(); if (S.center === 'HOME') applyCenter(false); } } catch (e) { /* no home position */ }
   loadHistory();
   try {
     const v = await getJSON(tarBase + 'version.json'); const folder = tarBase + 'db-' + v.databaseVersion + '/';
@@ -526,23 +551,48 @@ function airlineName(cs) {
 }
 
 // ---------- routes and far-away positions from the internet ----------
-const ROUTE_APIS = Q.has('routeApi') ? [Q.get('routeApi')] : ['https://adsb.im/api/0/routeset', 'https://api.adsb.lol/api/0/routeset'];
+const ROUTE_APIS = Q.has('routeApi') ? Q.get('routeApi').split(',').filter(Boolean) : ['https://adsb.im/api/0/routeset', 'https://api.adsb.lol/api/0/routeset'];
 const POS_API = Q.get('posApi') || 'https://api.adsb.lol/v2/';
 const routes = new Map();
+// a route worth keeping: two or more airports, and not marked by the service as impossible for where the aircraft is
+const goodRoute = (rt) => rt && Array.isArray(rt._airports) && rt._airports.length >= 2 && rt._airports.every((a) => a && typeof a === 'object') && rt.plausible !== false ? rt : null;
+// Each route service keeps its own table, so a flight one of them does not know is asked of the next one too.
 async function getRoute(p) {
   const cs = p.callsign(); if (!cs || !/^[A-Z]{2,3}\d/.test(cs)) return null;
   const c = routes.get(cs); if (c && nowS() < c.until) return c.route;
   routes.set(cs, { route: c ? c.route : null, until: nowS() + 30 });
   const body = JSON.stringify({ planes: [{ callsign: cs, lat: +p.rLat.toFixed(3), lng: +p.rLon.toFixed(3) }] });
+  let answered = false;
   for (const url of ROUTE_APIS) {
     try {
       const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body });
-      if (!r.ok) continue; const arr = await r.json(); const rt = Array.isArray(arr) ? arr.find((x) => x && x.callsign === cs) || arr[0] : null;
-      const good = rt && rt._airports && rt._airports.length >= 2 && rt.plausible !== false ? rt : null;
-      routes.set(cs, { route: good, until: nowS() + 6 * 3600 }); return good;
+      if (!r.ok) continue; const arr = await r.json(); if (!Array.isArray(arr)) continue; answered = true;
+      const good = goodRoute(arr.find((x) => x && x.callsign === cs) || arr[0]);
+      if (good) { routes.set(cs, { route: good, until: nowS() + 6 * 3600 }); return good; }
     } catch (e) { /* try the next service */ }
   }
+  if (answered) routes.set(cs, { route: null, until: nowS() + 600 });
   return null;
+}
+// The part of a route to show. A flight number can make stops (Los Angeles, New York, Boston), so an aircraft low to the ground
+// has to be near one of its airports, and then the leg it is on is shown: from the stop before when it is coming down, to the
+// next stop when it is climbing away. The route table is kept by volunteers and airlines reuse flight numbers, so a low
+// aircraft near none of its airports has another flight's route on file, and nothing is shown.
+function routeLeg(rt, p) {
+  const leg = pickLeg(rt, p);
+  return leg && leg[0] && leg[1] && typeof leg[0] === 'object' && typeof leg[1] === 'object' ? leg : null;   // never an airport that is missing
+}
+function pickLeg(rt, p) {
+  const ap = rt && rt._airports; if (!ap || ap.length < 2) return null;
+  const first = ap[0], last = ap[ap.length - 1];
+  if (p.ground || p.altFt >= 6000) return [first, last];
+  let at = -1, best = 120;
+  ap.forEach((a, i) => { if (!a || !isFinite(a.lat) || !isFinite(a.lon)) return; const d = gcDist(a.lat, a.lon, p.rLat, p.rLon); if (d <= best) { best = d; at = i; } });
+  if (at === -1) return null;
+  if (ap.length === 2) return [first, last];
+  if (at > 0 && (p.vrate < -200 || at === ap.length - 1)) return [ap[at - 1], ap[at]];
+  if (at < ap.length - 1 && (p.vrate > 300 || at === 0)) return [ap[at], ap[at + 1]];
+  return [first, last];
 }
 const follow = { want: '', reg: '', hex: null, lastRemote: 0, state: 'off', since: 0, netOk: true, tour: false };   // tour: the viewer pressed A, so the followed flight waits
 // Follow has the camera only while a flight is found and the viewer has not paused it with A
@@ -835,6 +885,7 @@ function livePose(sh, t, out, ref) {
   return out;
 }
 const TP = {}, FP = {};
+function setFade(f) { const el = $('jump'); if (!el) return; const v = f.toFixed(2); if (el._v === v) return; el._v = v; el.style.opacity = v; if (f > 0) el.style.background = scene.fog.color.getStyle(); }
 const B_E = new THREE.Vector3(), B_N = new THREE.Vector3(), B_U = new THREE.Vector3(), B_M = new THREE.Matrix4(), B_Q = new THREE.Quaternion(), CAMQ = new THREE.Quaternion();
 function updateCamera(t) {
   // what to look at next
@@ -850,9 +901,21 @@ function updateCamera(t) {
     const p = shot.plane, gone = !planes.has(p.hex) || p.opacity < 0.25 || !p.fresh(t);
     if (gone || (!hold() && el > shot.dur + S.pace)) goWide();
   } else goWide();
-  const s = smooth((t - shot.t0) / shot.dur);
+  const s = smooth((t - shot.t0) / shot.dur); let fade = 0;
   if (s >= 1 || !prevShot) { livePose(shot, t, pose); prevShot = null; }
-  else {
+  else if (shot.jump) {
+    // a long move: rise, fade while crossing, come down (see applyCenter)
+    livePose(prevShot, t, FP); livePose(shot, t, TP);
+    const u = (t - shot.t0) / shot.dur, there = u >= 0.5, P = there ? TP : FP;
+    pose.lat = P.lat; pose.lon = P.lon; pose.alt = P.alt; pose.az = P.az;
+    if (calm()) { pose.dist = P.dist; pose.el = P.el; fade = clamp((0.45 - Math.abs(u - 0.5)) / 0.3, 0, 1); }
+    else {
+      const high = clamp(Math.max(FP.dist, TP.dist) * 3.5, 400, 2400), k = there ? smooth((u - 0.6) / 0.4) : smooth(u / 0.4);
+      const a = there ? high : P.dist, b = there ? P.dist : high, ea = there ? 72 : P.el, eb = there ? P.el : 72;
+      pose.dist = Math.exp(lerp(Math.log(a), Math.log(b), k)); pose.el = lerp(ea, eb, k);
+      fade = clamp((0.2 - Math.abs(u - 0.5)) / 0.1, 0, 1);   // fully faded from 0.4 to 0.6, while the camera moves across
+    }
+  } else {
     livePose(prevShot, t, FP); livePose(shot, t, TP, FP.az);
     const sf = smooth((t - shot.t0) / (shot.dur * 0.72));
     pose.lat = lerp(FP.lat, TP.lat, sf); pose.lon = lerp(FP.lon, TP.lon, sf); pose.alt = lerp(FP.alt, TP.alt, sf);
@@ -862,6 +925,7 @@ function updateCamera(t) {
     pose.dist = Math.exp(lerp(Math.log(FP.dist), Math.log(TP.dist), s)) * (1 + arc * clamp(far / 400, 0, 0.25));
     pose.el = lerp(FP.el, TP.el, s) + arc * 4;
   }
+  setFade(fade);
   if (gcDist(proj.lat0, proj.lon0, pose.lat, pose.lon) > 150) reorigin(pose.lat, pose.lon);
   // place the camera in the local east, north, up frame of the point it looks at, so moving the map origin never shows
   project(pose.lat, pose.lon, pose.alt, TV);
@@ -910,15 +974,13 @@ function updateCaption(t) {
     const own = /^[A-Z]{3}\d/.test(cs) ? cs.slice(0, 3) : '', partner = own && PAINT_AS[own] && AIRLINES[PAINT_AS[own]];
     $('c-air').textContent = partner ? partner[1] + ', operated by ' + (AIRLINES[own] ? AIRLINES[own][1] : own) : al || (cs ? '' : 'Unidentified aircraft');
     $('c-flight').textContent = cs ? (partner ? partner[0] + ' ' + cs.slice(3) : cs.replace(/^([A-Z]{3})(\d)/, '$1 $2')) : (info.reg || p.hex.toUpperCase());
-    let route = '', rt = capRoute;
-    // The route table is kept by volunteers and listed by callsign, and airlines reuse flight numbers, so it is sometimes wrong.
-    // An aircraft low to the ground has to be near one end of its route. If it is near neither, the route on file is not this flight's.
-    if (rt && !p.ground && p.altFt < 6000) { const ap = rt._airports, a = ap[0], b = ap[ap.length - 1]; if (gcDist(a.lat, a.lon, p.rLat, p.rLon) > 120 && gcDist(b.lat, b.lon, p.rLat, p.rLon) > 120) rt = null; }
-    if (!rt && !p.ground && p.altFt < 4500) {   // no route to trust, but low beside an airport: say what can be seen
+    let route = '';
+    const leg = routeLeg(capRoute, p);
+    if (!leg && !p.ground && p.altFt < 4500) {   // no route to trust, but low beside an airport: say what can be seen
       const near = nearestAirport(p.rLat, p.rLon, 32);
       if (near) route = `<span style="margin-left:0">${p.vrate < -200 ? 'Arriving at' : p.vrate > 300 ? 'Departing' : 'Near'}</span> ${esc(near[3] || near[2])} <i>${esc(near[1] || near[0])}</i>`;
     }
-    if (rt) { const ap = rt._airports, a = ap[0], b = ap[ap.length - 1]; route = `${esc(placeName(a))} <i>${esc(a.iata || a.icao)}</i> <span>to</span> ${esc(placeName(b))} <i>${esc(b.iata || b.icao)}</i>`; }
+    if (leg) { const [a, b] = leg; route = `${esc(placeName(a))} <i>${esc(a.iata || a.icao)}</i> <span>to</span> ${esc(placeName(b))} <i>${esc(b.iata || b.icao)}</i>`; }
     if ($('c-route')._h !== route) { $('c-route').innerHTML = route; $('c-route')._h = route; }
     const trend = p.vrate > 350 ? 'climbing' : p.vrate < -350 ? 'descending' : '';
     const bits = [];
@@ -929,15 +991,15 @@ function updateCaption(t) {
     if ($('c-data')._h !== h) { $('c-data').innerHTML = h; $('c-data')._h = h; }
     if (__NET__) { const mark = dataBase && S.src === 'blend' && !p.remote ? (p.tAnt && t - p.tAnt < 20 ? 'Heard by ' + ANT : 'From the flight network') : ''; const n = $('c-src'); if (n._t !== mark) { n._t = mark; n.textContent = mark; n.hidden = !mark; } }
     let prog = '';
-    if (shot.kind === 'follow' && rt) {
-      const ap = rt._airports, a = ap[0], b = ap[ap.length - 1];
+    if (shot.kind === 'follow' && leg) {
+      const [a, b] = leg;
       const done = gcDist(a.lat, a.lon, p.rLat, p.rLon), left = gcDist(p.rLat, p.rLon, b.lat, b.lon), frac = clamp(done / Math.max(done + left, 1), 0, 1);
       $('c-bar').style.width = (frac * 100).toFixed(1) + '%';
       const mins = p.gs > 60 ? (left / (p.gs * 1.852)) * 60 : null;
       prog = `${fmtInt(left / MI)} miles to go` + (mins ? `, about ${mins >= 90 ? (mins / 60).toFixed(1).replace('.0', '') + ' hours' : fmtInt(Math.max(mins, 1)) + ' minutes'}` : '');
       if (p.remote) prog += '. Beyond ' + ANT + ', position from ADSB.lol';
     } else if (shot.kind === 'follow' && p.remote) prog = 'Beyond ' + ANT + ', position from ADSB.lol';
-    $('c-prog').hidden = !(shot.kind === 'follow' && rt); $('c-progtext').textContent = prog; $('c-progtext').hidden = !prog;
+    $('c-prog').hidden = !(shot.kind === 'follow' && leg); $('c-progtext').textContent = prog; $('c-progtext').hidden = !prog;
   }
   if (show !== capShown) { capShown = show; $('cap').classList.toggle('on', show); }
   // quiet status line
@@ -982,13 +1044,35 @@ function renderPlaces() {
   });
 }
 function addPlace() {
-  const ll = parseLatLon($('f-pll').value), note = $('places-note'), name = $('f-pname').value.trim().slice(0, 28) || 'My place';
-  if (!ll) { note.textContent = 'I could not read that as a latitude and longitude. It should look like 40.6892, -74.0445'; return; }
-  if (placeList().length >= 20) { note.textContent = 'That is the limit of 20 places. Remove one first.'; return; }
-  S.places = placeList().concat([{ n: name, lat: ll.lat, lon: ll.lon }]); save();
-  $('f-pname').value = ''; $('f-pll').value = ''; note.textContent = name + (S.keep ? ' added. It is kept on this device only.' : ' added. It will be forgotten when you close this page.');
+  const note = $('places-note'), typedName = $('f-pname').value.trim().slice(0, 28);
+  let where = $('f-pll').value.trim(), name = typedName;
+  // Version 3.7.1: the second box takes an address, a city or a zip code as well as a latitude and longitude. Anything that is
+  // not a latitude and longitude is looked up the way Find a place does, and the answers are shown under the box to pick from.
+  // Someone who types an address in the name box and leaves the second box empty gets it looked up too.
+  if (!where && typedName) { where = typedName; name = ''; }
+  if (!where) { note.textContent = 'Type an address, a city or a latitude and longitude in the second box.'; return; }
+  // only text made of numbers, degree and minute marks and the letters N, S, E and W counts as a latitude and longitude, so an
+  // address with two numbers in it (12 Route 7) is looked up rather than read as 12, 7
+  const ll = /^[\s\d.,;:+\-\u00b0'"\u2032\u2033\u2019\u201dNSEWnsew]+$/.test(where) ? parseLatLon(where) : null;
+  if (!ll) { lookPlace(MINE, where, name); return; }
+  addMine(name || 'My place', ll.lat, ll.lon);
+}
+function addMine(name, lat, lon) {
+  const note = $('places-note'), list = placeList(), at = list.findIndex((pl) => Math.abs(pl.lat - lat) < 0.0005 && Math.abs(pl.lon - lon) < 0.0005);
+  if (at !== -1) { note.textContent = 'That place is already in My places as ' + list[at].n + '.'; return; }
+  if (list.length >= 20) { note.textContent = 'That is the limit of 20 places. Remove one first.'; return; }
+  S.places = list.concat([{ n: name.slice(0, 28), lat: +(+lat).toFixed(5), lon: +(+lon).toFixed(5) }]); save();
+  $('f-pname').value = ''; $('f-pll').value = ''; $('pll-list').innerHTML = ''; mineAdded = name.slice(0, 28); note.textContent = mineNote();
   buildCenterOptions(); renderPlaces(); rebuildLabels();
 }
+// The notes that say how long a place is kept are written again when Keep my places changes, so they never disagree with the box.
+let mineAdded = '', lookAdded = '';
+const mineNote = () => mineAdded + (S.keep ? ' added. It is kept on this device only.' : ' added. It will be forgotten when you close this page.');
+function keepNotes() {   // a note left from before the box changed is written again to match it
+  if (lookAdded && $('look-note').textContent.indexOf(lookAdded + ' is in My places') === 0) $('look-note').textContent = lookNote();
+  if (mineAdded && $('places-note').textContent.indexOf(mineAdded + ' added.') === 0) $('places-note').textContent = mineNote();
+}
+const lookNote = () => lookAdded + (S.keep ? ' is in My places, kept on this device only.' : ' is in My places until you close this page.');
 // ---------- finding a typed place (version 3.7) ----------
 // An airport code is found in the airport list on this page. In the network edition anything else is looked up through the
 // relay on the receiver, which asks the OpenStreetMap place finder: only the typed words are sent, only when the viewer
@@ -996,7 +1080,6 @@ function addPlace() {
 // The home edition has no relay, so it searches the airport list by code, name or city only. A place picked from the
 // results joins My places, with the same rules for keeping it on this device.
 const placeCache = new Map();
-let lookSeq = 0;
 const placeApi = () => (__NET__ ? (Q.get('placeApi') || (relayBase() ? relayBase() + '/place/' : '')) : '');
 function airportsMatching(text) {
   const words = text.toLowerCase().split(' ').filter(Boolean);
@@ -1004,14 +1087,16 @@ function airportsMatching(text) {
     .sort((x, y) => (y[7] || 0) - (x[7] || 0)).slice(0, 5)
     .map((a) => ({ name: a[2], sub: [a[3], a[1] || a[0]].filter(Boolean).join(', '), lat: a[4], lon: a[5], code: a[0] }));
 }
-async function lookPlace() {
-  const text = $('f-lookq').value.replace(/\s+/g, ' ').trim().slice(0, 100), note = $('look-note'), seq = ++lookSeq, up = text.toUpperCase();
-  const show = (list, msg) => { if (seq === lookSeq) { showLook(list); note.textContent = msg; } };
+const LOOK = { list: 'look-list', note: 'look-note', seq: 0 }, MINE = { list: 'pll-list', note: 'places-note', seq: 0, mine: true };
+async function lookPlace(at = LOOK, typed, name = '') {
+  const text = String(typed == null ? $('f-lookq').value : typed).replace(/\s+/g, ' ').trim().slice(0, 100), note = $(at.note), seq = ++at.seq, up = text.toUpperCase();
+  const show = (list, msg) => { if (seq === at.seq) { showLook(list, at, name); note.textContent = msg; } };
+  const pick = at.mine ? 'Pick the right one to add it to My places' + (name ? ' as ' + name : '') + '.' : 'Pick one to center the sky there. It joins My places.';
   if (text.length < 2) return show([], 'Type at least two letters.');
   const a = /^[A-Z0-9]{3,4}$/.test(up) ? AP[up] || AP['K' + up] : null;
-  if (a) return show([{ name: a[2], sub: [a[3], a[1] || a[0]].filter(Boolean).join(', '), lat: a[4], lon: a[5], code: a[0] }], 'An airport on this page.');
+  if (a) return show([{ name: a[2], sub: [a[3], a[1] || a[0]].filter(Boolean).join(', '), lat: a[4], lon: a[5], code: a[0] }], at.mine ? pick : 'An airport on this page.');
   const api = placeApi();
-  if (!api) { const list = airportsMatching(text); return show(list, list.length ? 'Airports on this page that match.' : __NET__ ? 'No airport on this page matches, and this copy has no relay to look up other places.' : 'No airport on this page matches. Try an airport code, or paste a latitude and longitude below.'); }
+  if (!api) { const list = airportsMatching(text); return show(list, list.length ? (at.mine ? 'Airports on this page that match. ' + pick : 'Airports on this page that match.') : __NET__ ? 'No airport on this page matches, and this copy has no relay to look up other places. A latitude and longitude always works.' : 'No airport on this page matches. This copy can only look up airports, so paste a latitude and longitude from Google Maps instead.'); }
   if (encodeURIComponent(text).length > 270) return show([], 'That is too long to look up. Try fewer words.');
   const key = text.toLowerCase(); let found = placeCache.get(key);
   if (!found) {
@@ -1022,17 +1107,19 @@ async function lookPlace() {
         .map((p) => { const parts = p.name.split(',').map((x) => x.trim()).filter(Boolean); return { name: parts[0] || p.name.trim(), sub: parts.slice(1).join(', '), lat: +p.lat, lon: +p.lon }; });
       if (placeCache.size > 100) placeCache.clear();
       placeCache.set(key, found);
-    } catch (e) { return show([], e && e.message === '503' ? 'The place finder is busy. Try again in a moment.' : 'The place finder did not answer. Try again later, or paste a latitude and longitude below.'); }
+    } catch (e) { return show([], e && e.message === '503' ? 'The place finder is busy. Try again in a moment.' : 'The place finder did not answer. Try again later, or paste a latitude and longitude.'); }
   }
-  show(found, found.length ? 'Pick one to center the sky there. It joins My places.' : 'Nothing found for that. Try adding a state or a country.');
+  show(found, found.length ? pick : 'Nothing found for that. Try adding a state or a country, or paste a latitude and longitude.');
 }
-function showLook(list) {
-  const box = $('look-list'); box.innerHTML = '';
+function showLook(list, at = LOOK, name = '') {
+  const box = $(at.list); box.innerHTML = '';
   list.forEach((item) => {
     const row = document.createElement('div'); row.className = 'place';
-    const name = document.createElement('span'); name.textContent = item.name; const sub = document.createElement('small'); sub.textContent = item.sub || item.lat.toFixed(4) + ', ' + item.lon.toFixed(4);
-    const go = document.createElement('button'); go.type = 'button'; go.className = 'quiet'; go.textContent = 'Go there'; go.setAttribute('aria-label', 'Go to ' + item.name); go.onclick = () => goPlace(item);
-    name.appendChild(sub); row.appendChild(name); row.appendChild(go); box.appendChild(row);
+    const label = document.createElement('span'); label.textContent = item.name; const sub = document.createElement('small'); sub.textContent = item.sub || item.lat.toFixed(4) + ', ' + item.lon.toFixed(4);
+    const go = document.createElement('button'); go.type = 'button'; go.className = 'quiet';
+    if (at.mine) { go.textContent = 'Add'; go.setAttribute('aria-label', 'Add ' + item.name + ' to My places'); go.onclick = () => addMine(name || item.name, item.lat, item.lon); }
+    else { go.textContent = 'Go there'; go.setAttribute('aria-label', 'Go to ' + item.name); go.onclick = () => goPlace(item); }
+    label.appendChild(sub); row.appendChild(label); row.appendChild(go); box.appendChild(row);
   });
 }
 function goPlace(item) {
@@ -1047,14 +1134,24 @@ function goPlace(item) {
       S.places = list.concat([{ n: item.name.slice(0, 28), lat: +item.lat.toFixed(5), lon: +item.lon.toFixed(5) }]); i = S.places.length - 1;
     }
     S.center = 'P' + i;
-    note.textContent = item.name + (S.keep ? ' is in My places, kept on this device only.' : ' is in My places until you close this page.');
+    lookAdded = item.name; note.textContent = lookNote();
   }
   save(); $('look-list').innerHTML = ''; $('f-lookq').value = ''; buildCenterOptions(); renderPlaces(); applyCenter();
 }
-function applyCenter() {
+// Moving the sky somewhere far away does not glide across the map, which can make a viewer feel sick: the camera rises out of
+// the old place, the view fades to the sky's colour while it crosses, and it comes down into the new place. With the system's
+// reduce motion setting on, it only fades. A short move still glides. byViewer is false when the page moves the sky by itself.
+const JUMP_KM = 60;
+const calm = () => !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+function applyCenter(byViewer = true) {
   if (__NET__) setTimeout(() => netTick(true), 50);
+  const from = { lat: pose.lat, lon: pose.lon }, was = { kind: 'frozen', frozen: Object.assign({}, pose), azU: pose.az };
   C = centerPoint(); reorigin(C.lat, C.lon); for (const p of planes.values()) for (const s of p.trail) s.ep = -1;
-  if (shot.kind !== 'follow') { begin('wide', 7); shot.hold = 5; hideCaption(); }
+  if (shot.kind !== 'follow') {
+    const jump = byViewer && gcDist(from.lat, from.lon, C.lat, C.lon) > JUMP_KM;
+    begin('wide', jump ? (calm() ? 3 : 8) : 7); shot.hold = 5; shot.jump = jump; hideCaption();
+    prevShot = was;   // start from where the camera is now: the old wide shot would already be measured from the new center
+  }
 }
 function initPanel() {
   buildCenterOptions();
@@ -1065,7 +1162,7 @@ function initPanel() {
   $('f-pace').onchange = (e) => { S.pace = +e.target.value; save(); };
   $('f-click').value = String(S.clickSecs); $('f-click').onchange = (e) => { S.clickSecs = +e.target.value; save(); };
   $('f-flyback').value = String(S.flyBack); $('f-flyback').onchange = (e) => { S.flyBack = +e.target.value; save(); };
-  fillKeys(); $('help').onclick = () => toggleHelp(false);
+  fillKeys(); $('help').onclick = () => toggleHelp(false); $('mine-close').onclick = () => closeMine();
   $('findbtn').onclick = () => { $('findbtn').blur(); openFind(); };
   $('find-q').oninput = () => { findSel = 0; renderFind(); };
   canvasControls();
@@ -1080,7 +1177,7 @@ function initPanel() {
   $('f-trail').onchange = (e) => { S.trail = +e.target.value; save(); };
   renderPlaces(); $('f-places').onsubmit = (e) => { e.preventDefault(); addPlace(); };
   $('f-look').onsubmit = (e) => { e.preventDefault(); lookPlace(); };   // only on Enter or Find, never as the viewer types
-  $('f-keep').checked = !!S.keep; $('f-keep').onchange = (e) => { S.keep = e.target.checked; save(); $('places-note').textContent = S.keep ? 'Your places will be kept on this device.' : 'Your places are no longer kept. They will be forgotten when you close this page.'; };
+  $('f-keep').checked = !!S.keep; $('f-keep').onchange = (e) => { S.keep = e.target.checked; save(); keepNotes(); $('places-note').textContent = S.keep ? 'Your places will be kept on this device.' : 'Your places are no longer kept. They will be forgotten when you close this page.'; };
   if (SHARED) {   // a guest is not looking at an antenna of their own, and has no relay to point at
     document.body.classList.add('shared');
     if (__NET__) { const o = $('f-src').options; o[0].textContent = "This site's antenna and the flight network"; o[1].textContent = "This site's antenna only"; }
@@ -1113,6 +1210,7 @@ function initPanel() {
     const el = e.target, tag = el && el.tagName, typing = tag === 'INPUT' && el.type !== 'checkbox';
     if (e.key === 'Escape') { e.preventDefault(); escapeKey(); return; }   // Escape closes the topmost window first, wherever the keyboard focus is
     if (el && el.id === 'find-q') { findKey(e); return; }
+    if (!$('mine').hidden) { if ((e.key === 'p' || e.key === 'P') && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); closeMine(); } return; }   // with My places open, only P and Escape do anything; Enter and Space work its buttons
     if (typing) { if (e.key === 'Escape') togglePanel(false); return; }
     if (tag === 'SELECT' || tag === 'INPUT' || tag === 'BUTTON') { if (e.key === 's' || e.key === 'S' || e.key === 'Escape') { e.preventDefault(); togglePanel(e.key === 'Escape' ? false : undefined); } return; }
     if (e.ctrlKey || e.metaKey || e.altKey) return;   // leave the browser's own shortcuts alone
@@ -1134,13 +1232,14 @@ function initPanel() {
     else if (k === '-' || k === '_') zoomFly(1.25);
     else if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || (k === 'ArrowRight' && flying)) { e.preventDefault(); enterFly(); }
     else if (k === '/') { e.preventDefault(); openFind(); }
+    else if (k === 'p' || k === 'P') { e.preventDefault(); openMine(); }
     else if (k === 'l' || k === 'L') openListen();
     else if (k === 't' || k === 'T') { const TR = [0, 2, 5, 10]; S.trail = TR[(TR.indexOf(S.trail) + 1) % TR.length]; save(); $('f-trail').value = String(S.trail); }
     else if (k === 'c' || k === 'C') { S.captions = !S.captions; save(); $('f-cap').checked = S.captions; }
     else if (k === 's' || k === 'S' || k === 'Enter') togglePanel();
   });
   // which keys are down right now, for moving about in fly mode
-  window.addEventListener('keydown', (e) => { const tag = e.target && e.target.tagName; if (tag === 'INPUT' || tag === 'SELECT' || !$('help').hidden || !$('find').hidden || document.body.classList.contains('panel')) return; held.add(e.key); });
+  window.addEventListener('keydown', (e) => { const tag = e.target && e.target.tagName; if (tag === 'INPUT' || tag === 'SELECT' || !$('help').hidden || !$('find').hidden || !$('mine').hidden || document.body.classList.contains('panel')) return; held.add(e.key); });
   window.addEventListener('keyup', (e) => { held.delete(e.key); });
   window.addEventListener('blur', () => held.clear());
 }
@@ -1148,6 +1247,7 @@ function escapeKey() {
   const ae = document.activeElement; if (ae && ae !== document.body && ae.blur) ae.blur();   // give the keyboard back to the page, so the other keys work again
   if (!$('help').hidden) toggleHelp(false);
   else if (!$('find').hidden) closeFind();
+  else if (!$('mine').hidden) closeMine();
   else if (document.body.classList.contains('panel')) togglePanel(false);
   else if (shot.kind === 'fly' || shot.lock) leaveControls();
   else if (clicked) clickUntil = 0;
@@ -1175,6 +1275,7 @@ const HELP = [
   ['+ and -', 'Zoom in and out. The mouse wheel does too'],
   ['Click', 'Click an aircraft to see its details for a while'],
   ['Double click', 'Zoom in on an aircraft and stay with it'],
+  ['P', 'My places: pick one to move the sky there'],
   ['/', 'Search by airline, flight number, tail number, plane type, origin or destination'],
   ['Space bar', 'Hold on this aircraft, or move on'],
   ['Right arrow', 'Go to another aircraft, when not flying'],
@@ -1192,10 +1293,33 @@ function fillKeys() {
     for (const [k, v] of HELP) { const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = k; dd.textContent = v; dl.appendChild(dt); dl.appendChild(dd); }
   }
 }
-function toggleHelp(on) { const h = $('help'), open = on === undefined ? h.hidden : on; h.hidden = !open; if (open) { held.clear(); closeFind(); document.body.classList.add('awake'); } }
+function toggleHelp(on) { const h = $('help'), open = on === undefined ? h.hidden : on; h.hidden = !open; if (open) { held.clear(); closeFind(); closeMine(); document.body.classList.add('awake'); } }
+// Version 3.7.1: P opens a small window with just the viewer's places, the same list as "Center the sky on". One click moves the sky there.
+function openMine() {
+  toggleHelp(false); closeFind(); document.body.classList.remove('panel'); held.clear(); document.body.classList.add('awake');
+  renderMine(); $('mine').hidden = false;
+  const first = $('mine-list').querySelector('button') || $('mine-close'); first.focus();
+}
+// Each button goes to the place it names, looked up when clicked, so a list changed in another copy of the page meanwhile never sends the sky to a different place
+function renderMine() {
+  const box = $('mine-list'), had = box.contains(document.activeElement); box.innerHTML = ''; const list = placeList(), cur = /^P\d+$/.test(S.center) ? +S.center.slice(1) : -1;
+  list.forEach((pl, i) => {
+    const b = document.createElement('button'); b.type = 'button';
+    b.textContent = pl.n + (i === cur ? '  (here now)' : ''); b.setAttribute('aria-label', 'Go to ' + pl.n);
+    b.onclick = () => {
+      const j = placeList().findIndex((q) => q.n === pl.n && q.lat === pl.lat && q.lon === pl.lon);
+      if (j === -1) { renderMine(); return; }
+      closeMine(); S.center = 'P' + j; save(); buildCenterOptions(); applyCenter();
+    };
+    box.appendChild(b);
+  });
+  $('mine-note').textContent = list.length ? 'Click one to move the sky there. P or Escape closes this.' : 'No places yet. Press S, then add one under My places or with Find a place.';
+  if (had) (box.querySelector('button') || $('mine-close')).focus();
+}
+function closeMine() { const m = $('mine'); if (m.hidden) return; m.hidden = true; const ae = document.activeElement; if (ae && m.contains(ae) && ae.blur) ae.blur(); }
 let findSel = 0, findList = [], routesAsked = -1e9, findTimer = 0;
 function openFind() {
-  toggleHelp(false); document.body.classList.remove('panel'); held.clear(); $('find').hidden = false; clearInterval(findTimer); findTimer = setInterval(() => { if (!$('find').hidden) renderFind(); }, 2000); $('find-q').value = ''; findSel = 0; renderFind(); $('find-q').focus();
+  toggleHelp(false); closeMine(); document.body.classList.remove('panel'); held.clear(); $('find').hidden = false; clearInterval(findTimer); findTimer = setInterval(() => { if (!$('find').hidden) renderFind(); }, 2000); $('find-q').value = ''; findSel = 0; renderFind(); $('find-q').focus();
   let n = 0; for (const p of planes.values()) if (p.lat !== null && !p.info && n++ < 40) dbLookup(p).then(() => { if (!$('find').hidden) renderFind(); }, () => {});
   prefetchRoutes().then(() => { if (!$('find').hidden) renderFind(); });
 }
@@ -1222,24 +1346,23 @@ async function prefetchRoutes() {
     if (want.length >= 60) break;
   }
   if (!want.length) return;
-  const body = JSON.stringify({ planes: want });
+  let left = want, answered = false;
   for (const url of ROUTE_APIS) {
     try {
+      const body = JSON.stringify({ planes: left });
       const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body }); if (!r.ok) continue;
-      const arr = await r.json(); if (!Array.isArray(arr)) continue;
+      const arr = await r.json(); if (!Array.isArray(arr)) continue; answered = true;
       const got = new Map(arr.filter((x) => x && x.callsign).map((x) => [x.callsign, x]));
-      for (const w of want) { const rt = got.get(w.callsign), good = rt && rt._airports && rt._airports.length >= 2 && rt.plausible !== false ? rt : null; routes.set(w.callsign, { route: good, until: nowS() + (good ? 6 * 3600 : 600) }); }
-      return;
+      left = left.filter((w) => { const good = goodRoute(got.get(w.callsign)); if (good) routes.set(w.callsign, { route: good, until: nowS() + 6 * 3600 }); return !good; });
+      if (!left.length) return;
     } catch (e) { /* try the next service */ }
   }
+  // flights no service knows are asked again in ten minutes
+  if (answered) for (const w of left) routes.set(w.callsign, { route: null, until: nowS() + 600 });
 }
-// a route to trust: the same guard the caption uses, so a wrong entry in the route table never turns up as a search result
-function routeOf(p) {
-  const c = routes.get(p.callsign()), rt = c && c.route; if (!rt || !rt._airports) return null;
-  const ap = rt._airports, a = ap[0], b = ap[ap.length - 1]; if (!a || !b) return null;
-  if (!p.ground && p.altFt < 6000) { if (!isFinite(a.lat) || !isFinite(a.lon) || !isFinite(b.lat) || !isFinite(b.lon)) return null; if (gcDist(a.lat, a.lon, p.rLat, p.rLon) > 120 && gcDist(b.lat, b.lon, p.rLat, p.rLon) > 120) return null; }
-  return rt;
-}
+// a route to trust, as the two airports of the leg being flown: the same guard the caption uses, so a wrong entry in the route
+// table never turns up as a search result
+function routeOf(p) { const c = routes.get(p.callsign()); return routeLeg(c && c.route, p); }
 function flightLabel(p) {
   const cs = p.callsign(); if (!cs) return p.reg || p.hex.toUpperCase();
   const own = /^[A-Z]{3}\d/.test(cs) ? cs.slice(0, 3) : '', partner = own && PAINT_AS[own] && AIRLINES[PAINT_AS[own]];
@@ -1260,7 +1383,7 @@ function typeWords(c) {
 function searchText(p) {
   const cs = p.callsign(), own = /^[A-Z]{3}\d/.test(cs) ? cs.slice(0, 3) : '', ai = own && AIRLINES[own], partner = own && PAINT_AS[own] && AIRLINES[PAINT_AS[own]];
   const rt = routeOf(p), info = p.info || {};
-  const ends = rt ? [rt._airports[0], rt._airports[rt._airports.length - 1]].map((a) => [a.iata, a.icao, a.name, a.location].join(' ')).join(' ') : '';
+  const ends = rt ? rt.map((a) => [a.iata, a.icao, a.name, a.location].join(' ')).join(' ') : '';
   const kind = p.category === 'A7' ? 'helicopter rotorcraft' : '';
   const h = [cs, ai ? ai[0] + cs.slice(3) : '', partner ? partner[0] + cs.slice(3) : '', airlineName(cs), partner ? partner[1] : '', p.reg, info.reg, p.hex, p.type, typeWords(p.type), p.desc, info.long, info.type, kind, ends].join(' ').toLowerCase();
   return h + ' ' + h.replace(/[- ]/g, '');   // also without dashes and spaces, so A320 finds A-320 and DL1234 finds DL 1234
@@ -1282,7 +1405,7 @@ function renderFind() {
     const li = document.createElement('li'), b = document.createElement('b'), s = document.createElement('small'), rt = routeOf(p), al = airlineName(p.callsign());
     b.textContent = flightLabel(p) + (al ? '  ' + al : '');
     const type = prettyType((p.info && p.info.long) || p.desc || '') || p.type || '';
-    const route = rt ? placeName(rt._airports[0]) + ' to ' + placeName(rt._airports[rt._airports.length - 1]) : (/^[A-Z]{2,3}\d/.test(p.callsign()) ? 'route not known' : '');
+    const route = rt ? placeName(rt[0]) + ' to ' + placeName(rt[1]) : (/^[A-Z]{2,3}\d/.test(p.callsign()) ? 'route not known' : '');
     s.textContent = [type, p.ground ? 'on the ground' : fmtInt(Math.round(p.altFt / 25) * 25) + ' feet', route].filter(Boolean).join('  \u00b7  ');
     li.appendChild(b); li.appendChild(s); li.id = 'find-opt-' + i; li.setAttribute('role', 'option');
     li.onmouseenter = () => markFound(i);
@@ -1298,7 +1421,7 @@ function findKey(e) {
   else if (e.key === 'Enter') { e.preventDefault(); pickFound(findList[findSel]); }
 }
 function togglePanel(on) {
-  const b = document.body; const next = on === undefined ? !b.classList.contains('panel') : on; b.classList.toggle('panel', next); if (next) { b.classList.add('awake'); held.clear(); }
+  const b = document.body; const next = on === undefined ? !b.classList.contains('panel') : on; b.classList.toggle('panel', next); if (next) { b.classList.add('awake'); held.clear(); closeMine(); }
   // when the panel closes, take the keyboard back from whichever setting was last touched, so the space bar and the other keys work again
   if (!next && document.activeElement && document.activeElement !== document.body && document.activeElement.blur) document.activeElement.blur();
 }
@@ -1353,7 +1476,7 @@ if (S.follow) setFollow(S.follow);
 if (!MANUAL) { poll(); setInterval(followTick, 1000); setInterval(watchTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
   net, NET: __NET__ };
