@@ -1329,7 +1329,7 @@ function renderMine() {
 function closeMine() { const m = $('mine'); if (m.hidden) return; m.hidden = true; const ae = document.activeElement; if (ae && m.contains(ae) && ae.blur) ae.blur(); }
 let findSel = 0, findList = [], routesAsked = -1e9, findTimer = 0;
 function openFind() {
-  toggleHelp(false); document.body.classList.remove('panel'); held.clear(); $('find').hidden = false; clearInterval(findTimer); findTimer = setInterval(() => { if (!$('find').hidden) renderFind(); }, 2000); $('find-q').value = ''; findSel = 0; renderFind(); $('find-q').focus();
+  toggleHelp(false); closeMine(); document.body.classList.remove('panel'); held.clear(); $('find').hidden = false; clearInterval(findTimer); findTimer = setInterval(() => { if (!$('find').hidden) renderFind(); }, 2000); $('find-q').value = ''; findSel = 0; renderFind(); $('find-q').focus();
   let n = 0; for (const p of planes.values()) if (p.lat !== null && !p.info && n++ < 40) dbLookup(p).then(() => { if (!$('find').hidden) renderFind(); }, () => {});
   prefetchRoutes().then(() => { if (!$('find').hidden) renderFind(); });
 }
