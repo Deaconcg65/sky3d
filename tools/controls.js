@@ -383,7 +383,7 @@ const { chromium } = require('playwright');
     const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.mesh && q.kind !== 'light' && q.kind !== 'heli' && !q.remote);
     if (!p) return { none: true };
     const was = { type: p.type, category: p.category, kind: p.kind };
-    s.lockOn(p); await wait(4000);
+    s.lockOn(p); await wait(7500);   // the glide in to a locked aircraft takes 6 seconds, so measure only once it has finished
     const d0 = s.pose.dist;
     p.type = 'C172'; p.category = 'A1'; p.tPaint = 0;   // the type arrives while the camera is riding on it
     await wait(300); const soon = p.kind, d1 = s.pose.dist;
@@ -475,7 +475,8 @@ const { chromium } = require('playwright');
   await sim('/ctl/satsome?down=0');
   // a minute on, the missing photos are asked for again by themselves (the wait is cut short here)
   await satSome.evaluate(() => { const g = window.__sky.sat; for (const t of g.cache.values()) t.retry = 0; g.retryAt = 0.001; });
-  await satSome.waitForFunction(() => { const g = window.__sky.sat; return ![...g.cache.values()].some((t) => t.bad && g.want.has(t.k)); }, null, { timeout: 30000 }).catch(() => {});
+  // a photo asked for again stops counting as missing the moment it is asked for, so wait until the new ones have actually arrived
+  await satSome.waitForFunction((had) => { const g = window.__sky.sat; return g.loaded > had && !g.busy && !g.queue.length && ![...g.cache.values()].some((t) => t.bad && g.want.has(t.k)); }, part.loaded, { timeout: 30000 }).catch(() => {});
   const healed = await holes();
   ok('once the outage is over, the missing photos fill in on their own', healed.holes === 0 && healed.loaded > part.loaded, JSON.stringify(healed));
   await satSome.close();
