@@ -85,6 +85,7 @@ function farFlight(T) {
   return { hex: 'a4d2c1', type: 'adsb_icao', flight: 'DAL2210 ', r: 'N301DV', t: 'BCS1', desc: 'AIRBUS A-220-100', alt_baro: Math.round(p[2] / 25) * 25, gs: +p[3].toFixed(1), track: +brg(p0, q).toFixed(2), baro_rate: 0, category: 'A3', lat: +p[0].toFixed(6), lon: +p[1].toFixed(6), seen_pos: 0.4, seen: 0.1, messages: 9000 };
 }
 const DBDIR = path.join(root, 'dl/db');
+fs.mkdirSync(DBDIR, { recursive: true });   // dl/ is not kept in git, so a fresh copy has no folder to save the downloaded tables in
 function dbFile(name) {
   const fp = path.join(DBDIR, path.basename(name));
   if (!fs.existsSync(fp)) { try { execFileSync('curl', ['-sS', '-f', '-m', '30', '-o', fp, 'https://raw.githubusercontent.com/wiedehopf/tar1090-db/master/db/' + path.basename(name)]); } catch (e) { return null; } }
