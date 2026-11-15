@@ -544,7 +544,7 @@ async function getRoute(p) {
   }
   return null;
 }
-const follow = { want: '', hex: null, lastRemote: 0, state: 'off', since: 0, netOk: true, tour: false };   // tour: the viewer pressed A, so the followed flight waits
+const follow = { want: '', reg: '', hex: null, lastRemote: 0, state: 'off', since: 0, netOk: true, tour: false };   // tour: the viewer pressed A, so the followed flight waits
 // Follow has the camera only while a flight is found and the viewer has not paused it with A
 function followOwns() { return follow.state === 'on' && !follow.tour; }
 function parseFlight(s) {
@@ -553,8 +553,10 @@ function parseFlight(s) {
   return s;
 }
 function setFollow(text) {
-  follow.tour = false; follow.want = parseFlight(text); follow.hex = null; follow.state = follow.want ? 'looking' : 'off'; follow.since = nowS(); follow.lastRemote = 0;
-  S.follow = follow.want; save(); $('f-flight').value = follow.want; $('f-stop').hidden = !follow.want;
+  // a tail number written with a dash (9H-ABC, C-GABC) keeps it for the flight networks' registration question, which needs it
+  const dashed = String(text || '').toUpperCase().replace(/[^A-Z0-9-]/g, '');
+  follow.tour = false; follow.want = parseFlight(text); follow.reg = /^[A-Z0-9]{1,3}-[A-Z0-9]{1,5}$/.test(dashed) ? dashed : ''; follow.hex = null; follow.state = follow.want ? 'looking' : 'off'; follow.since = nowS(); follow.lastRemote = 0;
+  S.follow = follow.reg || follow.want; save(); $('f-flight').value = S.follow; $('f-stop').hidden = !follow.want;
   if (follow.want && (shot.lock || shot.kind === 'fly')) leaveControls();   // a flight the viewer asks to follow takes the camera from a locked aircraft or fly mode
 
 }
@@ -578,7 +580,7 @@ async function followTick() {
       const posApi = __NET__ && relayBase() && !Q.has('posApi') ? relayBase() + '/v2/' : POS_API;
       const d = await getJSON(posApi + 'callsign/' + encodeURIComponent(follow.want) + (MANUAL && fakeT ? '?t=' + fakeT : '')); follow.netOk = true;
       let ac = aged((d.ac || d.aircraft || []).filter((a) => a.lat != null), d);
-      if (!ac.length && /^[A-Z]-?[A-Z0-9]{3,5}$|^N\d/.test(follow.want)) { const d2 = await getJSON(posApi + 'reg/' + encodeURIComponent(follow.want)); ac = aged((d2.ac || d2.aircraft || []).filter((a) => a.lat != null), d2); }
+      if (!ac.length && (follow.reg || /^[A-Z]-?[A-Z0-9]{3,5}$|^N\d/.test(follow.want))) { const d2 = await getJSON(posApi + 'reg/' + encodeURIComponent(follow.reg || follow.want)); ac = aged((d2.ac || d2.aircraft || []).filter((a) => a.lat != null), d2); }
       if (ac.length) ingest([ac[0]], 0, 1);
     } catch (e) { follow.netOk = false; }
   }

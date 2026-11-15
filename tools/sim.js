@@ -85,6 +85,10 @@ function farFlight(T) {
   return { hex: 'a4d2c1', type: 'adsb_icao', flight: 'DAL2210 ', r: 'N301DV', t: 'BCS1', desc: 'AIRBUS A-220-100', alt_baro: Math.round(p[2] / 25) * 25, gs: +p[3].toFixed(1), track: +brg(p0, q).toFixed(2), baro_rate: 0, category: 'A3', lat: +p[0].toFixed(6), lon: +p[1].toFixed(6), seen_pos: 0.4, seen: 0.1, messages: 9000 };
 }
 // one aircraft on the watch list, far beyond the pretend antenna: N2RF, a Citation CJ4 over Pennsylvania (version 3.7 checks)
+// a tail number that starts with a digit and broadcasts an airline callsign: Follow must find it by registration (version 3.7)
+function maltaFlight(T) {
+  return { hex: '4d2001', type: 'adsb_icao', flight: 'AMC123  ', r: '9H-ABC', t: 'A320', desc: 'AIRBUS A-320', alt_baro: 36000, gs: 450, track: 90, baro_rate: 0, category: 'A3', lat: 41.0, lon: -71.5, seen_pos: 0.5, seen: 0.2, messages: 3000 };
+}
 function watchFlight(T) {
   const k = (T % 3600) / 3600;
   return { hex: 'a1f2e3', type: 'adsb_icao', flight: 'N2RF    ', r: 'N2RF', t: 'C25C', desc: 'CESSNA 525C CITATION CJ4', alt_baro: 41000, gs: 420, track: 270, baro_rate: 0, category: 'A2', lat: 40.3, lon: +(-75.5 - k * 3).toFixed(4), seen_pos: 0.6, seen: 0.2, messages: 4000 };
@@ -151,7 +155,7 @@ http.createServer((req, res) => {
     return json({ places: out }, { 'Access-Control-Allow-Origin': '*' });
   }
   if (u.pathname === '/ctl/placeasked') return json({ asked: placeAsked, last: placeLast });   // how often the place finder was asked, and the last question
-  if (u.pathname.startsWith('/mock/v2/reg/')) { regAsked++; const r = decodeURIComponent(u.pathname.split('/').pop()); const ac = r === 'N2RF' && watchShown ? [watchFlight(T)] : []; return json({ ac, msg: 'No error', now: Math.round(T * 1000), total: ac.length }); }
+  if (u.pathname.startsWith('/mock/v2/reg/')) { regAsked++; const r = decodeURIComponent(u.pathname.split('/').pop()); const ac = r === 'N2RF' && watchShown ? [watchFlight(T)] : r === '9H-ABC' ? [maltaFlight(T)] : []; return json({ ac, msg: 'No error', now: Math.round(T * 1000), total: ac.length }); }
   if (u.pathname === '/ctl/watch') { watchShown = u.searchParams.get('on') !== '0'; return json({ watchShown }); }   // N2RF in the air (on=1) or not (on=0)
   if (u.pathname === '/ctl/regasked') return json({ asked: regAsked });   // how many times the stand-in flight network has been asked about one registration
   if (u.pathname.startsWith('/mock/v2/')) return json({ ac: [], msg: 'No error', now: Math.round(T * 1000), total: 0 });

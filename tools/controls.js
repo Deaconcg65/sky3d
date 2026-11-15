@@ -126,6 +126,9 @@ const { chromium } = require('playwright');
     const m = s.matchFollow(); const out = { hex: p.hex, alerted: !!row, want: s.follow.want, matched: m && m.hex }; s.setFollow(''); s.S.watch = ['N2RF']; s.watchState.delete('N7DB'); return out;
   });
   ok('a tail number known only from the aircraft table: the watch list alerts and Follow finds that aircraft', dbw && dbw.alerted && dbw.want === 'N7DB' && dbw.matched === dbw.hex, JSON.stringify(dbw));
+  // a dashed tail number that starts with a digit, from a watch alert found only through the networks: Follow asks by registration with the dash and finds it
+  const mt = await page.evaluate(async () => { const s = window.__sky; s.setFollow('9H-ABC'); s.follow.lastRemote = -1e9; await s.followTick(); await s.followTick(); const out = { want: s.follow.want, reg: s.follow.reg, saved: s.S.follow, state: s.follow.state, hex: s.follow.hex }; s.setFollow(''); return out; });
+  ok('Follow on a tail number like 9H-ABC asks by registration and follows that aircraft', mt.reg === '9H-ABC' && mt.saved === '9H-ABC' && mt.state === 'on' && mt.hex === '4d2001', JSON.stringify(mt));
   // add an aircraft the antenna is hearing, through the settings: the alert comes from the page's own aircraft, with no network question
   const local = await page.evaluate(() => { const p = [...window.__sky.planes.values()].find((q) => q.fresh(performance.now() / 1000) && q.src === 'ant' && !q.remote && /^[A-Z]{3}\d/.test(q.callsign()) && q.opacity > 0.5); return p && p.callsign(); });
   const asked2 = (await sim('/ctl/regasked')).asked;
