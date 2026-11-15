@@ -77,7 +77,7 @@ function snapshot(T, opts = {}) {
 const strip = (a) => { const o = Object.assign({}, a); delete o._route; delete o._type; return o; };
 const AIRPORTS = JSON.parse(fs.readFileSync(path.join(root, 'build/airports.json'), 'utf8')); const AP = {}; for (const a of AIRPORTS) AP[a[0]] = a;
 // a 16 by 16 green PNG, made here so the simulator needs no image files
-let satAsked = 0;
+let satAsked = 0, satSomeDown = true;
 const SAT_PNG = (() => {
   const crcT = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; crcT[n] = c >>> 0; }
   const crc = (b) => { let c = 0xffffffff; for (const x of b) c = crcT[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
@@ -143,6 +143,12 @@ http.createServer((req, res) => {
   }
   // satellite photo tiles for the page checks (version 3.8): a small green square for any tile, or nothing at all from satfail
   if (u.pathname.startsWith('/mock/sat/')) { satAsked++; res.writeHead(200, { 'Content-Type': 'image/png', 'Access-Control-Allow-Origin': '*' }); return res.end(SAT_PNG); }
+  if (u.pathname.startsWith('/mock/satsome/')) {   // a photo service with a short outage: tiles with an odd x fail until /ctl/satsome?down=0
+    satAsked++; const x = parseInt(u.pathname.split('/').pop(), 10);
+    if (satSomeDown && x % 2) { res.writeHead(503, { 'Access-Control-Allow-Origin': '*' }); return res.end(); }
+    res.writeHead(200, { 'Content-Type': 'image/png', 'Access-Control-Allow-Origin': '*' }); return res.end(SAT_PNG);
+  }
+  if (u.pathname === '/ctl/satsome') { satSomeDown = u.searchParams.get('down') !== '0'; return json({ satSomeDown }); }
   if (u.pathname.startsWith('/mock/satfail/')) { res.writeHead(404, { 'Access-Control-Allow-Origin': '*' }); return res.end(); }
   // a route service that knows no flights at all: the page must then ask the next service (version 3.7.1)
   if (u.pathname === '/mock/routeset-none') {

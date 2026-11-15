@@ -300,6 +300,20 @@ const { chromium } = require('playwright');
   ok('after the pause, the page asks the photo service again on its own', retried);
   ok('when the photo service does not answer, the drawn map stays and the page stops asking', down.down && down.failed >= 12 && down.land > 0 && down.landShown && /not loading/.test(down.note) && later === down.asked, JSON.stringify(Object.assign(down, { later })));
   await satBad.close();
+  // a short outage after some photos loaded: the missing ones are asked for again, when switched off and on and a minute later by themselves
+  const satSome = await browser.newPage({ viewport: { width: 960, height: 540 } }); satSome.on('pageerror', (e) => errs.push('PAGEERROR (satellite outage): ' + e.message));
+  await sim('/ctl/satsome?down=1'); await satSome.goto(PAGE + '&sat=1&satApi=/mock/satsome/{z}/{y}/{x}.png'); await satSome.waitForTimeout(7000);
+  const holes = () => satSome.evaluate(() => { const g = window.__sky.sat; return { loaded: g.loaded, failed: g.failed, asked: g.asked, down: g.down, holes: [...g.cache.values()].filter((t) => t.bad && g.want.has(t.k)).length }; });
+  const part = await holes();
+  const toggled = await satSome.evaluate(async () => { const s = window.__sky, before = s.sat.asked; s.S.sat = false; s.applySat(); s.S.sat = true; s.applySat(); await new Promise((r) => setTimeout(r, 2500)); return s.sat.asked - before; });
+  ok('photos that failed during a short outage are asked for again when the setting is switched off and on', part.loaded > 0 && part.holes > 0 && !part.down && toggled >= part.holes, JSON.stringify(Object.assign(part, { toggled })));
+  await sim('/ctl/satsome?down=0');
+  // a minute on, the missing photos are asked for again by themselves (the wait is cut short here)
+  await satSome.evaluate(() => { const g = window.__sky.sat; for (const t of g.cache.values()) t.retry = 0; g.retryAt = 0.001; });
+  await satSome.waitForTimeout(3000);
+  const healed = await holes();
+  ok('once the outage is over, the missing photos fill in on their own', healed.holes === 0 && healed.loaded > part.loaded, JSON.stringify(healed));
+  await satSome.close();
   console.log('errors:', errs.join(' ; ') || 'none');
   await browser.close();
 })();

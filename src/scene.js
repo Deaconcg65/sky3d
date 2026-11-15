@@ -254,17 +254,26 @@ export class SatGround {
   constructor(scene, url, renderer) {
     this.url = url; this.group = new THREE.Group(); this.group.visible = false; scene.add(this.group);
     this.cache = new Map(); this.want = new Set(); this.queue = []; this.busy = 0; this.MAX = 140; this.on = false;
-    this.asked = 0; this.loaded = 0; this.failed = 0; this.down = false; this.downUntil = 0; this.key = '';
+    this.asked = 0; this.loaded = 0; this.failed = 0; this.down = false; this.downUntil = 0; this.retryAt = 0; this.key = '';
     this.tint = new THREE.Color(1, 1, 1); this.aniso = Math.min(4, renderer.capabilities.getMaxAnisotropy());
     this.loader = new THREE.TextureLoader(); this.loader.setCrossOrigin('anonymous');
     this.v = new THREE.Vector3();
   }
-  setOn(on) { this.on = !!on; this.group.visible = this.on; if (!this.on) { this.queue.length = 0; this.key = ''; } }
+  setOn(on) {
+    this.on = !!on; this.group.visible = this.on; this.queue.length = 0; this.key = '';
+    if (this.on) { this.retryAt = 0; for (const t of this.cache.values()) t.bad = false; }   // switched on again: every missing photo gets another try
+  }
   setTint(c) { this.tint.copy(c); for (const t of this.cache.values()) if (t.mesh) t.mesh.material.color.copy(c); }
   shown() { let n = 0; for (const t of this.cache.values()) if (t.mesh && t.mesh.visible) n++; return n; }
   // lat, lon: the spot the camera looks at; spanKm: about how much ground is in view around it; now: seconds
   update(lat, lon, spanKm, now) {
     if (!this.on) return;
+    // a photo that failed is asked for again a minute later, if it is still wanted, so a short outage does not leave holes for good
+    const clock = performance.now() / 1000;
+    if (this.retryAt && clock > this.retryAt) {
+      this.retryAt = 0; this.key = '';
+      for (const t of this.cache.values()) if (t.bad) { if (t.retry <= clock) t.bad = false; else this.retryAt = this.retryAt ? Math.min(this.retryAt, t.retry) : t.retry; }
+    }
     if (this.down && performance.now() / 1000 > this.downUntil) { this.down = false; this.failed = 0; this.key = ''; for (const [k, t] of this.cache) if (t.bad) this.cache.delete(k); }   // try again, even if the view has not moved
     const wide = Math.max(Math.cos(lat * D2R), 0.2) * 40075;
     const zf = clamp(Math.floor(Math.log2(wide / (spanKm / 6))), 4, 13), zc = Math.max(zf - 2, 2);
@@ -309,6 +318,7 @@ export class SatGround {
         this.place(t); this.group.add(t.mesh); t.mesh.visible = this.want.has(t.k); this.pump();
       }, undefined, () => {
         t.loading = false; t.bad = true; this.busy--; this.failed++;
+        t.retry = performance.now() / 1000 + 60; if (!this.retryAt || t.retry < this.retryAt) this.retryAt = t.retry;
         // a service that answers nothing at all is left alone for five minutes, and the drawn ground stays
         if (this.failed >= 12 && this.loaded === 0) { this.down = true; this.downUntil = performance.now() / 1000 + 300; this.queue.length = 0; }
         this.pump();
