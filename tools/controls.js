@@ -376,6 +376,61 @@ const { chromium } = require('playwright');
   ok('the 747 has a hump: its body is taller over the front than over the rear, unlike the plain four-engine jet', shp.b747.frontTop > shp.b747.rearTop + 0.01 && Math.abs(shp.heavy.frontTop - shp.heavy.rearTop) < 0.005, JSON.stringify(shp));
   ok('the A380 has a double deck the whole length: taller than the 747 over the rear and as tall at the front', shp.a380.rearTop > shp.b747.rearTop + 0.01 && shp.a380.frontTop >= shp.b747.frontTop - 0.005, JSON.stringify(shp));
   ok('the small plane has a propeller at its nose, ahead of where its body ends', shp.light.front > 0.5, JSON.stringify(shp.light));
+  // ---------- version 3.9: the shape follows the aircraft type even while the camera rides on that aircraft ----------
+  const ride = await page.evaluate(async () => {
+    const s = window.__sky, wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    s.setFollow('');
+    const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.mesh && q.kind !== 'light' && q.kind !== 'heli' && !q.remote);
+    if (!p) return { none: true };
+    const was = { type: p.type, category: p.category, kind: p.kind };
+    s.lockOn(p); await wait(4000);
+    const d0 = s.pose.dist;
+    p.type = 'C172'; p.category = 'A1'; p.tPaint = 0;   // the type arrives while the camera is riding on it
+    await wait(300); const soon = p.kind, d1 = s.pose.dist;
+    await wait(5000); const d2 = s.pose.dist;
+    p.type = was.type; p.category = was.category; p.tPaint = 0; await wait(300);
+    const back = p.kind; s.autoTour();
+    return { was: was.kind, soon, back, jump: +(Math.abs(d1 - d0) / d0).toFixed(3), settled: +(d2 / d0).toFixed(3) };
+  });
+  ok('a Cessna 172 gets its small-plane shape as soon as its type is known, even with the camera riding on it, and the camera eases in instead of jumping', !ride.none && ride.soon === 'light' && ride.jump < 0.08 && ride.settled < 0.85 && ride.back === ride.was, JSON.stringify(ride));
+  await page.waitForTimeout(500);
+  // ---------- version 3.9: business jets get their own shape ----------
+  const biz = await page.evaluate(() => {
+    const s = window.__sky, kinds = {};
+    for (const t of ['C25C', 'C56X', 'C680', 'C700', 'CL35', 'GLF6', 'GLEX', 'E55P', 'LJ45', 'FA7X', 'H25B', 'PC24', 'HDJT', 'C172', 'B738', 'A320', 'C17', 'E75L']) kinds[t] = s.modelFor('', t);
+    const m = new s.PlaneMesh('biz', s.paintFor('N345MG', 'a1b2c3', 'biz')), pos = m.mesh.geometry.attributes.position.array;
+    let rearHigh = 0, underWing = 0, finTop = -1, tailWide = 0;
+    for (let i = 0; i < pos.length; i += 3) {
+      const x = pos[i], y = pos[i + 1], z = pos[i + 2];
+      if (z < -0.18 && z > -0.33 && Math.abs(x) > 0.06 && Math.abs(x) < 0.11 && y > 0.01) rearHigh++;   // engine pods beside the rear of the body
+      if (z > -0.05 && z < 0.15 && Math.abs(x) > 0.1 && Math.abs(x) < 0.3 && y < -0.035) underWing++;  // anything hanging under the wings
+      if (Math.abs(x) < 0.01 && z < -0.4) finTop = Math.max(finTop, y);
+      if (y > 0.18 && z < -0.44) tailWide = Math.max(tailWide, Math.abs(x));                              // the tailplane on top of the fin
+    }
+    const out = { kinds, rearHigh, underWing, finTop: +finTop.toFixed(3), tailWide: +tailWide.toFixed(3), len: m.len }; m.dispose && m.dispose(); return out;
+  });
+  const bizTypes = ['C25C', 'C56X', 'C680', 'C700', 'CL35', 'GLF6', 'GLEX', 'E55P', 'LJ45', 'FA7X', 'H25B', 'PC24', 'HDJT'];
+  ok('Citations, Challengers, Gulfstreams, Phenoms, Learjets, Falcons, Hawkers, the PC-24 and the HondaJet are drawn as business jets; the Cessna 172, the airliners and the C-17 are not', bizTypes.every((t) => biz.kinds[t] === 'biz') && biz.kinds.C172 === 'light' && biz.kinds.B738 === 'jet' && biz.kinds.A320 === 'jet' && biz.kinds.C17 === 'heavy' && biz.kinds.E75L === 'jet', JSON.stringify(biz.kinds));
+  ok('the business jet has its engines at the back of the body, nothing under its wings, a tailplane on top of the fin, and is drawn smaller than an airliner', biz.rearHigh > 10 && biz.underWing === 0 && biz.finTop > 0.19 && biz.tailWide > 0.15 && biz.len < 1, JSON.stringify(biz));
+  // ---------- version 3.9: the caption names both ends of the trip ----------
+  const words = await page.evaluate(() => {
+    const s = window.__sky, A = { name: 'Palm Beach International', location: 'West Palm Beach', iata: 'PBI', icao: 'KPBI', lat: 26.6832, lon: -80.0956 }, B = { name: 'Hartsfield Jackson Atlanta International', location: 'Atlanta', iata: 'ATL', icao: 'KATL', lat: 33.6367, lon: -84.4281 };
+    const text = (p) => { const d = document.createElement('div'); d.innerHTML = s.routeHtml([A, B], Object.assign({ ground: false, vrate: 0 }, p)); return d.textContent.replace(/\s+/g, ' ').trim(); };
+    return { up: text({ altFt: 1575, vrate: 1800, rLat: 26.72, rLon: -80.15 }), high: text({ altFt: 31000, rLat: 30.5, rLon: -82.3 }), down: text({ altFt: 2500, vrate: -900, rLat: 33.7, rLon: -84.3 }) };
+  });
+  ok('the route line always names both ends, with Departing or Arriving in front when the aircraft is low beside one of them', words.up === 'Departing West Palm Beach PBI to Atlanta ATL' && words.high === 'West Palm Beach PBI to Atlanta ATL' && words.down === 'Arriving West Palm Beach PBI to Atlanta ATL', JSON.stringify(words));
+  // ---------- version 3.9: routes are asked of the relay first, which asks the route services from home ----------
+  const rel = await browser.newPage({ viewport: { width: 640, height: 360 } }); rel.on('pageerror', (e) => errs.push('PAGEERROR (routes through the relay): ' + e.message));
+  await rel.goto(PAGE.replace('routeApi=/mock/routeset&', '') + '&relay=/mock'); await rel.waitForTimeout(5000);
+  const viaRelay = await rel.evaluate(async () => {
+    const s = window.__sky; await fetch('/ctl/routeasks?reset=1'); s.routes.clear();
+    const ps = [...s.planes.values()].filter((q) => q.lat !== null && /^[A-Z]{2,3}\d/.test(q.callsign())).slice(0, 3);
+    const got = []; for (const p of ps) { const r = await s.getRoute(p); got.push(!!(r && r._airports && r._airports.length >= 2)); }
+    const n = await (await fetch('/ctl/routeasks')).json();
+    return { asked: ps.length, got, n };
+  });
+  ok('with a relay beside the page, routes are asked of the relay and not of the route services directly', viaRelay.asked > 0 && viaRelay.got.some(Boolean) && viaRelay.n.relay >= viaRelay.asked && viaRelay.n.direct === 0, JSON.stringify(viaRelay));
+  await rel.close(); await page.bringToFront();
   // ---------- version 3.8: satellite photos on the ground ----------
   // off by default: no photo is asked for and no credit line shows
   const satPage = await browser.newPage({ viewport: { width: 960, height: 540 } }); satPage.on('pageerror', (e) => errs.push('PAGEERROR (satellite): ' + e.message));

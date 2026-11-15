@@ -526,6 +526,24 @@ function jet(engines = 2, body = '') {
   if (engines === 4) { eng(0.31, -0.03); eng(-0.31, -0.03); }
   return finish(G);
 }
+// A business jet (version 3.9): a slim body, the two engines on pods at the back of the body instead of under the wings,
+// and the tailplane on top of the fin (a T-tail), the way a Citation, a Learjet or a Gulfstream looks.
+function bizjet() {
+  const G = newG();
+  fuselage(G, [[-0.5, 0.004, 0.022], [-0.45, 0.012, 0.018], [-0.32, 0.03, 0.007], [-0.16, 0.04, 0], [0.3, 0.04, 0], [0.37, 0.037, -0.002], [0.42, 0.03, -0.006], [0.46, 0.02, -0.01], [0.49, 0.009, -0.013], [0.5, 0.0, -0.014]],
+    { glass: [0.37, 0.455, 62] });
+  both(G, ZI.wing, [[0.035, -0.024, 0.08], [0.035, -0.024, -0.1], [0.46, -0.004, -0.2], [0.46, -0.004, -0.15]], [0, 0.01, 0]);
+  both(G, ZI.tip, [[0.457, -0.003, -0.152], [0.457, -0.003, -0.2], [0.47, 0.045, -0.222], [0.47, 0.045, -0.197]], [0.005, 0, 0]);
+  fin(G, [0, 0.038, -0.27], [0, 0.034, -0.46], [0, 0.2, -0.53], [0, 0.2, -0.46]);
+  both(G, ZI.wing, [[0.006, 0.196, -0.45], [0.006, 0.196, -0.53], [0.17, 0.204, -0.56], [0.17, 0.204, -0.515]], [0, 0.008, 0]);
+  const eng = (x) => {
+    const g = new THREE.CylinderGeometry(0.024, 0.019, 0.14, 12); g.rotateX(Math.PI / 2); g.translate(x, 0.034, -0.25); pushGeo(G, ZI.eng, g);
+    const d = new THREE.CircleGeometry(0.02, 12); d.translate(x, 0.034, -0.25 + 0.0706); pushGeo(G, ZI.glass, d);
+  };
+  eng(0.085); eng(-0.085);
+  both(G, ZI.wing, [[0.03, 0.03, -0.21], [0.03, 0.03, -0.29], [0.064, 0.032, -0.29], [0.064, 0.032, -0.21]], [0, 0.008, 0]);   // the pylons holding the engines to the body
+  return finish(G);
+}
 function light() {
   const G = newG();
   // a single engine at the nose: a spinner and a two-blade propeller, standing still as it looks in a photo
@@ -568,6 +586,7 @@ export const MODELS = {
   b747: { make: () => jet(4, '747'), len: 1.45, tips: 0.512, tipY: 0.05, tipZ: -0.2, tail: -0.5, tailY: 0.035, finTop: [0.225, -0.49], belly: [-0.062, 0.02] },
   a380: { make: () => jet(4, 'a380'), len: 1.5, tips: 0.512, tipY: 0.05, tipZ: -0.2, tail: -0.5, tailY: 0.035, finTop: [0.225, -0.49], belly: [-0.062, 0.02] },
   heavy: { make: () => jet(4), len: 1.45, tips: 0.512, tipY: 0.05, tipZ: -0.2, tail: -0.5, tailY: 0.035, finTop: [0.225, -0.49], belly: [-0.062, 0.02] },
+  biz: { make: bizjet, len: 0.62, tips: 0.47, tipY: 0.045, tipZ: -0.21, tail: -0.5, tailY: 0.03, finTop: [0.216, -0.5], belly: [-0.045, -0.02] },
   light: { make: light, len: 0.5, tips: 0.66, tipY: 0.078, tipZ: 0.11, tail: -0.5, tailY: 0.02, finTop: [0.215, -0.48], belly: [-0.07, 0.1] },
   heli: { make: heli, len: 0.5, tips: 0.1, tipY: 0.0, tipZ: 0.1, tail: -0.5, tailY: 0.03, finTop: [0.185, -0.5], belly: [-0.112, 0.14] },
 };
@@ -580,6 +599,9 @@ export function modelFor(category, type) {
   if (/^A38/.test(t)) return 'a380';
   if (/^(A34|IL96|A124|C5M|C17$|B52|K35)/.test(t)) return 'heavy';
   if (category === 'A5' || /^(B77|B78|A33|A35|B76|MD11|DC10|A30|A310)/.test(t)) return 'heavy2';
+  // business jets: Citations, Challengers, Gulfstreams, Global Express, Phenoms, Learjets, Falcons, Hawkers, the PC-24 and the HondaJet.
+  // (A three-engine Falcon 7X or 900 is drawn with two; the rear engines are what make the shape.)
+  if (/^(C25|C50|C51|C52|C55|C56|C65|C68|C70|C75|CL30|CL35|CL60|GLF|GL5T|GL6T|GL7T|GLEX|GA5C|GA6C|GA7C|GA8C|E50P|E55P|LJ\d|FA\d|F2TH|F900|H25|PC24|HDJT|PRM1|BE40|G150|G280|ASTR|GALX|EA50)/.test(t)) return 'biz';
   if (category === 'A1' || /^(C1[5-9]\d|C2\d\d|P28|PA\d|SR2|DA4|BE3[3-6]|BE5|M20|C82|C72)/.test(t)) return 'light';
   return 'jet';
 }
@@ -646,7 +668,7 @@ export class PlaneMesh {
     this.phase = Math.random() * 10;
   }
   makeLanding() {
-    const m = this.model, k = this.key, z = k === 'light' ? 0.215 : k === 'heli' ? 0.4 : 0.128, x = k === 'jet' || k === 'heavy' || k === 'b747' || k === 'a380' ? 0.075 : 0, y = k === 'light' ? 0.062 : k === 'heli' ? -0.06 : -0.034;
+    const m = this.model, k = this.key, z = k === 'light' ? 0.215 : k === 'heli' ? 0.4 : 0.128, x = k === 'biz' ? 0.06 : k === 'jet' || k === 'heavy' || k === 'b747' || k === 'a380' ? 0.075 : 0, y = k === 'light' ? 0.062 : k === 'heli' ? -0.06 : -0.034;
     const mk = (px) => { const mat = new THREE.SpriteMaterial({ map: dotTexture(), color: 0xfff6e0, transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, fog: false, opacity: 0 });
       const o = new THREE.Sprite(mat); o.position.set(px, y, z); o.renderOrder = 13; this.group.add(o); return o; };
     const lamps = x ? [mk(x), mk(-x)] : [mk(0)];

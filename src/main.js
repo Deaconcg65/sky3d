@@ -379,14 +379,17 @@ function updatePlane(p, t, dt, night) {
   if (!p.mesh) {
     const kind = modelFor(p.category, p.type);
     p.mesh = new PlaneMesh(kind, paintFor(p.callsign(), p.hex, kind)); p.kind = kind; p.paintKey = p.callsign() + '|' + kind; planeLayer.add(p.mesh.group);
+    if (!p.type && !p.info && db) dbLookup(p);   // an aircraft heard without its type: look it up in the receiver's tables now, so it has its own shape before the camera comes to it
   } else if (p.paintKey !== p.callsign() + '|' + modelFor(p.category, p.type) && t - (p.tPaint || 0) > 5) {
-    // the callsign or the aircraft type often arrives a few seconds after the first position, so repaint once it is known
+    // the callsign or the aircraft type often arrives a few seconds after the first position, so repaint once it is known.
+    // The new shape goes on at once, even with the camera riding on this aircraft (version 3.9): the camera's distance
+    // follows the new size slowly (camLen below), so the view never jumps.
     p.tPaint = t; const kind = modelFor(p.category, p.type);
-    if (kind !== p.kind && (shot.plane === p || (prevShot && prevShot.plane === p))) { /* the camera is riding on this aircraft: change its shape later, so the view never jumps */ }
-    else if (kind !== p.kind) { planeLayer.remove(p.mesh.group); p.mesh.dispose(); p.mesh = new PlaneMesh(kind, paintFor(p.callsign(), p.hex, kind)); p.kind = kind; planeLayer.add(p.mesh.group); }
+    if (kind !== p.kind) { planeLayer.remove(p.mesh.group); p.mesh.dispose(); p.mesh = new PlaneMesh(kind, paintFor(p.callsign(), p.hex, kind)); p.kind = kind; planeLayer.add(p.mesh.group); }
     else { const c = paintFor(p.callsign(), p.hex, kind); p.mesh.paint.forEach((col, i) => col.set(c[i])); }
     p.paintKey = p.callsign() + '|' + p.kind;
   }
+  p.camLen = p.camLen ? lerp(p.camLen, p.mesh.len, clamp(dt * 0.5, 0, 1)) : p.mesh.len;   // the size the camera keeps its distance by, easing to a new shape over a few seconds
   const g = p.mesh.group; g.position.copy(p.pos);
   const dist = camera.position.distanceTo(p.pos);
   const L = 0.264 * Math.pow(Math.max(dist, 0.5), 0.485) * p.mesh.len;
@@ -566,20 +569,49 @@ const routes = new Map();
 // a route worth keeping: two or more airports, and not marked by the service as impossible for where the aircraft is
 const goodRoute = (rt) => rt && Array.isArray(rt._airports) && rt._airports.length >= 2 && rt._airports.every((a) => a && typeof a === 'object') && rt.plausible !== false ? rt : null;
 // Each route service keeps its own table, so a flight one of them does not know is asked of the next one too.
+// Web browsers may not be allowed to read the route services directly (the same rule that keeps them from the flight
+// networks), so a page with a relay beside it asks the relay first (version 3.9), and the relay asks them from home.
+// Only when the relay cannot answer does the page ask the services itself.
+const routeRelay = () => (Q.has('routeApi') ? '' : relayBase());
+async function askRoutes(list) {   // list: [{ callsign, lat, lng }]. Returns the routes found by callsign, and whether any service answered.
+  const got = new Map(); let left = list, answered = false;
+  const rb = routeRelay();
+  if (rb) {
+    const parts = []; for (let i = 0; i < left.length; i += 10) parts.push(left.slice(i, i + 10));
+    let settled = new Set();
+    await Promise.all(parts.map(async (part) => {
+      try {
+        const items = part.map((w) => w.callsign + ',' + w.lat.toFixed(2) + ',' + w.lng.toFixed(2)).join(';');
+        const arr = await getJSON(rb + '/routes/' + items); if (!Array.isArray(arr)) return; answered = true;
+        for (const x of arr) {
+          if (!x || !part.some((w) => w.callsign === x.callsign)) continue;
+          settled.add(x.callsign); const good = goodRoute(x); if (good) got.set(x.callsign, good);
+        }
+      } catch (e) { /* the relay is not there or could not ask: the page asks the services itself */ }
+    }));
+    left = left.filter((w) => !settled.has(w.callsign));   // a flight the relay answered for, found or not, is settled
+  }
+  if (!left.length) return { got, answered };
+  for (const url of ROUTE_APIS) {
+    try {
+      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: JSON.stringify({ planes: left }) });
+      if (!r.ok) continue; const arr = await r.json(); if (!Array.isArray(arr)) continue; answered = true;
+      const one = left.length === 1 ? arr.find((x) => x && x.callsign === left[0].callsign) || arr[0] : null;
+      for (const x of one ? [Object.assign({}, one, { callsign: left[0].callsign })] : arr) {
+        if (!x || !x.callsign) continue; const good = goodRoute(x); if (good && left.some((w) => w.callsign === x.callsign)) got.set(x.callsign, good);
+      }
+      left = left.filter((w) => !got.has(w.callsign)); if (!left.length) break;
+    } catch (e) { /* try the next service */ }
+  }
+  return { got, answered };
+}
 async function getRoute(p) {
   const cs = p.callsign(); if (!cs || !/^[A-Z]{2,3}\d/.test(cs)) return null;
   const c = routes.get(cs); if (c && nowS() < c.until) return c.route;
   routes.set(cs, { route: c ? c.route : null, until: nowS() + 30 });
-  const body = JSON.stringify({ planes: [{ callsign: cs, lat: +p.rLat.toFixed(3), lng: +p.rLon.toFixed(3) }] });
-  let answered = false;
-  for (const url of ROUTE_APIS) {
-    try {
-      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body });
-      if (!r.ok) continue; const arr = await r.json(); if (!Array.isArray(arr)) continue; answered = true;
-      const good = goodRoute(arr.find((x) => x && x.callsign === cs) || arr[0]);
-      if (good) { routes.set(cs, { route: good, until: nowS() + 6 * 3600 }); return good; }
-    } catch (e) { /* try the next service */ }
-  }
+  const { got, answered } = await askRoutes([{ callsign: cs, lat: +p.rLat.toFixed(3), lng: +p.rLon.toFixed(3) }]);
+  const good = got.get(cs);
+  if (good) { routes.set(cs, { route: good, until: nowS() + 6 * 3600 }); return good; }
   if (answered) routes.set(cs, { route: null, until: nowS() + 600 });
   return null;
 }
@@ -907,7 +939,7 @@ function pickNext() {
   let pool = c.filter((p) => recent.indexOf(p.hex) === -1); if (!pool.length) pool = c.filter((p) => p.hex !== recent[recent.length - 1]); if (!pool.length) pool = c;
   return pool[Math.floor(Math.random() * pool.length)];
 }
-function visitDist(p) { return 3.1 * (p.mesh ? Math.pow(p.mesh.len, 0.8) : 1); }
+function visitDist(p) { return 3.1 * (p.mesh ? Math.pow(p.camLen || p.mesh.len, 0.8) : 1); }
 // where a shot wants the camera at time t; the compass angle is kept continuous so the camera never swings the long way round
 function livePose(sh, t, out, ref) {
   if (sh.kind === 'frozen') return Object.assign(out, sh.frozen);
@@ -1013,6 +1045,12 @@ function prepareCaption(p) {
 }
 function esc(s) { return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 function placeName(a) { return ((String(a.location || a.name || '')).split(/[,(/]/)[0].trim()) || a.iata || a.icao || 'unknown'; }
+// Both ends of the trip, always (version 3.9), with a word in front when the aircraft is low beside one of them.
+function routeHtml(leg, p) {
+  const [a, b] = leg, low = !p.ground && p.altFt < 4500, nearA = low && gcDist(a.lat, a.lon, p.rLat, p.rLon) < 32, nearB = low && gcDist(b.lat, b.lon, p.rLat, p.rLon) < 32;
+  const word = nearA && !(nearB && p.vrate < -200) ? 'Departing' : nearB ? 'Arriving' : '';
+  return `${word ? `<span style="margin-left:0">${word}</span> ` : ''}${esc(placeName(a))} <i>${esc(a.iata || a.icao)}</i> <span>to</span> ${esc(placeName(b))} <i>${esc(b.iata || b.icao)}</i>`;
+}
 function updateCaption(t) {
   if (clicked && t >= clickUntil) { clicked = null; if ((shot.kind === 'visit' || shot.kind === 'follow') && shot.plane && capPlane !== shot.plane) prepareCaption(shot.plane); }
   const cl = !!clicked && capPlane === clicked;
@@ -1025,12 +1063,12 @@ function updateCaption(t) {
     $('c-air').textContent = partner ? partner[1] + ', operated by ' + (AIRLINES[own] ? AIRLINES[own][1] : own) : al || (cs ? '' : 'Unidentified aircraft');
     $('c-flight').textContent = cs ? (partner ? partner[0] + ' ' + cs.slice(3) : cs.replace(/^([A-Z]{3})(\d)/, '$1 $2')) : (info.reg || p.hex.toUpperCase());
     let route = '';
-    const leg = routeLeg(capRoute, p);
+    const known = routes.get(cs), leg = routeLeg(capRoute || (known && known.route), p);   // a route that came in after the caption asked (version 3.9) is shown too
     if (!leg && !p.ground && p.altFt < 4500) {   // no route to trust, but low beside an airport: say what can be seen
       const near = nearestAirport(p.rLat, p.rLon, 32);
       if (near) route = `<span style="margin-left:0">${p.vrate < -200 ? 'Arriving at' : p.vrate > 300 ? 'Departing' : 'Near'}</span> ${esc(near[3] || near[2])} <i>${esc(near[1] || near[0])}</i>`;
     }
-    if (leg) { const [a, b] = leg; route = `${esc(placeName(a))} <i>${esc(a.iata || a.icao)}</i> <span>to</span> ${esc(placeName(b))} <i>${esc(b.iata || b.icao)}</i>`; }
+    if (leg) route = routeHtml(leg, p);
     if ($('c-route')._h !== route) { $('c-route').innerHTML = route; $('c-route')._h = route; }
     const trend = p.vrate > 350 ? 'climbing' : p.vrate < -350 ? 'descending' : '';
     const bits = [];
@@ -1411,19 +1449,12 @@ async function prefetchRoutes() {
     if (want.length >= 60) break;
   }
   if (!want.length) return;
-  let left = want, answered = false;
-  for (const url of ROUTE_APIS) {
-    try {
-      const body = JSON.stringify({ planes: left });
-      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body }); if (!r.ok) continue;
-      const arr = await r.json(); if (!Array.isArray(arr)) continue; answered = true;
-      const got = new Map(arr.filter((x) => x && x.callsign).map((x) => [x.callsign, x]));
-      left = left.filter((w) => { const good = goodRoute(got.get(w.callsign)); if (good) routes.set(w.callsign, { route: good, until: nowS() + 6 * 3600 }); return !good; });
-      if (!left.length) return;
-    } catch (e) { /* try the next service */ }
+  const { got, answered } = await askRoutes(want);
+  for (const w of want) {
+    const good = got.get(w.callsign);
+    if (good) routes.set(w.callsign, { route: good, until: nowS() + 6 * 3600 });
+    else if (answered) routes.set(w.callsign, { route: null, until: nowS() + 600 });   // flights no service knows are asked again in ten minutes
   }
-  // flights no service knows are asked again in ten minutes
-  if (answered) for (const w of left) routes.set(w.callsign, { route: null, until: nowS() + 600 });
 }
 // a route to trust, as the two airports of the leg being flown: the same guard the caption uses, so a wrong entry in the route
 // table never turns up as a search result
@@ -1547,7 +1578,7 @@ if (S.follow) setFollow(S.follow);
 if (!MANUAL) { poll(); setInterval(followTick, 1000); setInterval(watchTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { save, modelFor, cameraOwner, leaveControls, airportLabelAt, centerOnAirport, get labels() { return labels; }, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { save, modelFor, routeHtml, cameraOwner, leaveControls, airportLabelAt, centerOnAirport, get labels() { return labels; }, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
   net, NET: __NET__ };

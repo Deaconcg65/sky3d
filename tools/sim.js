@@ -78,6 +78,7 @@ const strip = (a) => { const o = Object.assign({}, a); delete o._route; delete o
 const AIRPORTS = JSON.parse(fs.readFileSync(path.join(root, 'build/airports.json'), 'utf8')); const AP = {}; for (const a of AIRPORTS) AP[a[0]] = a;
 // a 16 by 16 green PNG, made here so the simulator needs no image files
 let satAsked = 0, satSomeDown = true;
+const routeAsks = { direct: 0, relay: 0 };   // how many flights the page asked about each way, for the checks (version 3.9)
 const SAT_PNG = (() => {
   const crcT = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; crcT[n] = c >>> 0; }
   const crc = (b) => { let c = 0xffffffff; for (const x of b) c = crcT[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
@@ -157,18 +158,28 @@ http.createServer((req, res) => {
       json(planes.map((p) => ({ callsign: p.callsign, airport_codes: 'unknown', _airports: [] })), { 'Access-Control-Allow-Origin': '*' });
     }); return;
   }
+  const routeFor = (cs) => {
+    const ac = snapshot(T, { all: true }).find((x) => x.flight.trim() === cs); let codes = ac ? ac._route : null; if (cs === 'DAL2210') codes = ['KATL', 'KBOS'];
+    const aps = codes ? codes.map(apObj).filter(Boolean) : [];
+    return aps.length >= 2 ? { callsign: cs, number: cs.slice(3), airline_code: cs.slice(0, 3), airport_codes: codes.join('-'), _airports: aps, plausible: true } : { callsign: cs, airport_codes: 'unknown', _airports: [] };
+  };
   if (u.pathname === '/mock/routeset') {
     let body = ''; req.on('data', (c) => body += c); req.on('end', () => {
       let planes = []; try { planes = JSON.parse(body).planes; } catch (e) { /* */ }
-      const all = snapshot(T, { all: true });
-      const out = planes.map((p) => {
-        const ac = all.find((a) => a.flight.trim() === p.callsign); let codes = ac ? ac._route : null; if (p.callsign === 'DAL2210') codes = ['KATL', 'KBOS'];
-        const aps = codes ? codes.map(apObj).filter(Boolean) : [];
-        return aps.length >= 2 ? { callsign: p.callsign, number: p.callsign.slice(3), airline_code: p.callsign.slice(0, 3), airport_codes: codes.join('-'), _airports: aps, plausible: true } : { callsign: p.callsign, airport_codes: 'unknown', _airports: [] };
-      });
-      json(out, { 'Access-Control-Allow-Origin': '*' });
+      routeAsks.direct += planes.length;
+      json(planes.map((p) => routeFor(p.callsign)), { 'Access-Control-Allow-Origin': '*' });
     }); return;
   }
+  // what the relay hands the page for routes (version 3.9): the same answers, asked with a plain address of up to ten flights
+  if (u.pathname.startsWith('/mock/routes/')) {
+    const items = decodeURIComponent(u.pathname.slice('/mock/routes/'.length)).split(';').map((x) => x.split(',')[0]).filter(Boolean).slice(0, 10);
+    routeAsks.relay += items.length;
+    return json(items.map(routeFor), { 'Access-Control-Allow-Origin': '*' });
+  }
+  if (u.pathname === '/ctl/routeasks') { const out = Object.assign({}, routeAsks); if (u.searchParams.get('reset')) { routeAsks.direct = 0; routeAsks.relay = 0; } return json(out); }
+  // the route table itself, which the relay reads only when no route service answers
+  const st = /^\/mock\/standing\/[A-Z0-9]{2}\/([A-Z0-9]{3,8})\.json$/.exec(u.pathname);
+  if (st) { const r = routeFor(st[1]); if (!r._airports.length) { res.writeHead(404); return res.end(); } delete r.plausible; return json(r); }
   if (u.pathname === '/mock/wx') {   // stand-in for the weather service: steady rain with a west wind
     return json({ latitude: +u.searchParams.get('latitude'), longitude: +u.searchParams.get('longitude'), current: { time: '2026-10-10T12:00', temperature_2m: 52.4, weather_code: 63, cloud_cover: 100, wind_speed_10m: 14.2, wind_direction_10m: 262, wind_gusts_10m: 27.5, visibility: 9000, snow_depth: 0 } }, { 'Access-Control-Allow-Origin': '*' });
   }
