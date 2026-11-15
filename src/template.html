@@ -88,6 +88,13 @@ body.shared #panel .home-only { display: none; }
 #panel dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 14px 0 0; font-size: 13px; color: var(--soft); }
 #panel dt { color: var(--ink); } #panel dd { margin: 0; }
 #close { position: absolute; top: 20px; right: 20px; }
+#watch { position: fixed; left: 50%; top: 2.5vh; transform: translateX(-50%); width: min(640px, 92vw); z-index: 4; display: flex; flex-direction: column; gap: 8px; }
+#watch .w-row { display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--lamp); border-radius: 12px; padding: 11px 13px; font-size: 15px; line-height: 1.35;
+  box-shadow: 0 0 18px rgba(255,208,138,0.35); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+#watch .w-row span { flex: 1; min-width: 0; }
+#watch button { font: 500 14px var(--face); color: #1a1408; background: var(--lamp); border: 0; border-radius: 8px; padding: 8px 13px; cursor: pointer; white-space: nowrap; }
+#watch button.quiet { background: transparent; color: var(--soft); border: 1px solid var(--line); }
+#watch button:focus-visible { outline: 2px solid var(--lamp); outline-offset: 2px; }
 [hidden] { display: none !important; }
 @media (prefers-reduced-motion: reduce) { #cap, #msg, #panel, #shade { transition: none; } }
 </style>
@@ -109,6 +116,7 @@ body.shared #panel .home-only { display: none; }
 <button id="listen" type="button" hidden></button>
 <button id="findbtn" type="button">Search</button>
 <div id="pick" hidden></div>
+<div id="watch" hidden aria-live="assertive" aria-label="Watch list alerts"></div>
 <div id="find" hidden role="dialog" aria-label="Search flights">
   <input id="find-q" role="combobox" aria-expanded="true" aria-controls="find-list" aria-autocomplete="list" type="text" placeholder="Search: airline, flight, tail number, plane type, origin or destination" autocomplete="off" spellcheck="false" aria-label="Search flights">
   <div id="find-note" role="status"></div>
@@ -170,6 +178,16 @@ body.shared #panel .home-only { display: none; }
     <label for="f-flight">Follow one flight</label>
     <div class="row"><input id="f-flight" type="text" maxlength="9" placeholder="DL1234" autocomplete="off" spellcheck="false"><button type="submit">Follow</button><button id="f-stop" class="quiet" type="button" hidden>Stop</button></div>
     <div class="note">Type a flight number such as DL1234 or a tail number such as N123AB. Beyond the antenna's reach its position comes from ADSB.lol.</div>
+  </form>
+  <form id="f-watch">
+    <label for="f-wadd">Watch list</label>
+    <div id="watchlist"></div>
+    <div class="row"><input id="f-wadd" type="text" maxlength="10" placeholder="N2RF" autocomplete="off" spellcheck="false" aria-label="Tail number or flight number to watch for"><button type="submit">Add</button></div>
+<!--NET-->    <div class="note" id="watch-note">Up to 10 tail numbers or flight numbers. You get an alert when one is seen anywhere: by the antenna, or by the flight networks, which are asked about each one every two minutes or so. Alerts come only while this page is open.</div><!--/NET-->
+<!--HOME-->    <div class="note" id="watch-note">Up to 10 tail numbers or flight numbers. You get an alert when the antenna hears one. Alerts come only while this page is open.</div><!--/HOME-->
+    <label class="check"><input id="f-wsound" type="checkbox"> Play a sound with an alert</label>
+    <label class="check"><input id="f-wnote" type="checkbox"> Also notify me when this page is in the background</label>
+    <div class="note" id="wnote-note"></div>
   </form>
 
   <label for="f-pace">Time with each aircraft</label>

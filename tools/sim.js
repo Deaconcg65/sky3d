@@ -84,6 +84,11 @@ function farFlight(T) {
   const u = 2600 + (T % 3000), p = smoothAt(f, u), q = smoothAt(f, u + 2), p0 = smoothAt(f, u - 2);
   return { hex: 'a4d2c1', type: 'adsb_icao', flight: 'DAL2210 ', r: 'N301DV', t: 'BCS1', desc: 'AIRBUS A-220-100', alt_baro: Math.round(p[2] / 25) * 25, gs: +p[3].toFixed(1), track: +brg(p0, q).toFixed(2), baro_rate: 0, category: 'A3', lat: +p[0].toFixed(6), lon: +p[1].toFixed(6), seen_pos: 0.4, seen: 0.1, messages: 9000 };
 }
+// one aircraft on the watch list, far beyond the pretend antenna: N2RF, a Citation CJ4 over Pennsylvania (version 3.7 checks)
+function watchFlight(T) {
+  const k = (T % 3600) / 3600;
+  return { hex: 'a1f2e3', type: 'adsb_icao', flight: 'N2RF    ', r: 'N2RF', t: 'C25C', desc: 'CESSNA 525C CITATION CJ4', alt_baro: 41000, gs: 420, track: 270, baro_rate: 0, category: 'A2', lat: 40.3, lon: +(-75.5 - k * 3).toFixed(4), seen_pos: 0.6, seen: 0.2, messages: 4000 };
+}
 const DBDIR = path.join(root, 'dl/db');
 fs.mkdirSync(DBDIR, { recursive: true });   // dl/ is not kept in git, so a fresh copy has no folder to save the downloaded tables in
 function dbFile(name) {
@@ -91,7 +96,7 @@ function dbFile(name) {
   if (!fs.existsSync(fp)) { try { execFileSync('curl', ['-sS', '-f', '-m', '30', '-o', fp, 'https://raw.githubusercontent.com/wiedehopf/tar1090-db/master/db/' + path.basename(name)]); } catch (e) { return null; } }
   return fs.existsSync(fp) ? fs.readFileSync(fp) : null;
 }
-let stall = false, stallNet = false, netAsked = 0;
+let stall = false, stallNet = false, netAsked = 0, watchShown = true, regAsked = 0;
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x'), T = u.searchParams.has('t') ? +u.searchParams.get('t') : Date.now() / 1000;
   const json = (o, extra) => { res.writeHead(200, Object.assign({ 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' }, extra || {})); res.end(typeof o === 'string' || Buffer.isBuffer(o) ? o : JSON.stringify(o)); };
@@ -129,6 +134,9 @@ http.createServer((req, res) => {
   }
   if (u.pathname === '/mock/v2/callsign/REDIR') { res.writeHead(302, { Location: 'http://127.0.0.1:' + PORT + '/tar1090/data/aircraft.json' }); return res.end(); }   // a flight network that tries to point the relay back at the receiver
   if (u.pathname.startsWith('/mock/v2/callsign/')) { const cs = decodeURIComponent(u.pathname.split('/').pop()); return json({ ac: cs === 'DAL2210' ? [farFlight(T)] : [], msg: 'No error', now: Math.round(T * 1000), total: cs === 'DAL2210' ? 1 : 0 }); }
+  if (u.pathname.startsWith('/mock/v2/reg/')) { regAsked++; const r = decodeURIComponent(u.pathname.split('/').pop()); const ac = r === 'N2RF' && watchShown ? [watchFlight(T)] : []; return json({ ac, msg: 'No error', now: Math.round(T * 1000), total: ac.length }); }
+  if (u.pathname === '/ctl/watch') { watchShown = u.searchParams.get('on') !== '0'; return json({ watchShown }); }   // N2RF in the air (on=1) or not (on=0)
+  if (u.pathname === '/ctl/regasked') return json({ asked: regAsked });   // how many times the stand-in flight network has been asked about one registration
   if (u.pathname.startsWith('/mock/v2/')) return json({ ac: [], msg: 'No error', now: Math.round(T * 1000), total: 0 });
   res.writeHead(404); res.end('not found');
 }).listen(PORT, () => console.log('sim on', PORT));

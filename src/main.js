@@ -19,7 +19,7 @@ const PRESETS = [
 ];
 if (__NET__) PRESETS.push(['KBOS', 'Boston'], ['KMKE', 'Milwaukee'], ['KPHL', 'Philadelphia'], ['KDCA', 'Washington National'], ['KATL', 'Atlanta'], ['KMIA', 'Miami'], ['KORD', 'Chicago O\'Hare'], ['KDFW', 'Dallas Fort Worth'],
   ['KDEN', 'Denver'], ['KLAX', 'Los Angeles'], ['KSFO', 'San Francisco'], ['KSEA', 'Seattle']);
-const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr', src: 'blend', relay: '', netmax: 130, clickSecs: 15, flyBack: 30, places: [], keep: null };
+const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr', src: 'blend', relay: '', netmax: 130, clickSecs: 15, flyBack: 30, places: [], keep: null, watch: null, watchSound: true, watchNote: false };
 // SHARED: the page was opened at a secure web address, which is how a receiver is shared with people outside the house.
 // At home it is opened at the receiver's own plain address.
 const SHARED = Q.has('shared') ? Q.get('shared') !== '0' : location.protocol === 'https:';
@@ -32,6 +32,15 @@ for (const k of Object.keys(DEFAULTS)) if (Q.has(k) && typeof DEFAULTS[k] !== 'o
 // nothing is left behind on a borrowed or public computer. Without "keep", they last until the page is closed.
 const placeList = () => (Array.isArray(S.places) ? S.places : []);
 if (Q.has('keep')) S.keep = Q.get('keep') !== '0'; else if (typeof S.keep !== 'boolean') S.keep = !SHARED || placeList().length > 0;
+// Version 3.7: the watch list, the viewer's own aircraft to be told about. It starts with N2RF on the receiver's own screens
+// and empty for guests on the shared address, so a guest's page asks the flight networks about nothing it was not told to.
+const WATCH_MAX = 10;
+function watchKey(text) {
+  const s = String(text || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').replace(/^-+|-+$/g, '');
+  if (!/^[A-Z0-9-]{2,8}$/.test(s)) return '';
+  return s.indexOf('-') === -1 ? parseFlight(s).slice(0, 8) : s;   // DL1234 becomes DAL1234, as in Follow; a registration with a dash keeps it
+}
+S.watch = Array.isArray(S.watch) ? [...new Set(S.watch.map(watchKey).filter(Boolean))].slice(0, WATCH_MAX) : (SHARED ? [] : ['N2RF']);
 const save = () => {
   try {
     const out = Object.assign({}, S);
@@ -575,6 +584,134 @@ async function followTick() {
   }
 }
 
+// ---------- watch list (version 3.7) ----------
+// Each aircraft on the list is looked for among the aircraft the page is tracking, every second. In the network edition the flight
+// networks are also asked about it through the relay, one aircraft at a time, so each one is asked about every two minutes or so,
+// and never while the page is already tracking it. The relay allows about 15 single-flight questions a minute for everyone
+// watching together, which is why the list is short. An alert comes when an aircraft on the list is seen after not being seen,
+// and again only once it has been out of sight for 20 minutes. Alerts happen only while this page is open.
+const watchState = new Map();   // per entry: when it was last seen, where, when the networks were last asked, and whether an alert has been given
+const WATCH_GONE = 20 * 60, WATCH_EVERY = 120, WATCH_GAP = 15;
+const watch = { busy: false, next: 0 };
+const watchList = () => (Array.isArray(S.watch) ? S.watch : []);
+function wstate(key) { let st = watchState.get(key); if (!st) { st = { seenAt: -1e9, where: null, asked: -1e9, netOk: null, alerted: false }; watchState.set(key, st); } return st; }
+const bareReg = (r) => String(r || '').toUpperCase().replace(/-/g, '');
+function watchMatches(p, bare) { return p.callsign() === bare || bareReg(p.reg) === bare || bareReg(p.info && p.info.reg) === bare || p.hex.toUpperCase() === bare; }
+// A flight number with an airline code goes to the networks as a callsign, anything else as a registration (tail number)
+const watchAsCallsign = (key) => /^[A-Z]{3}\d{1,4}[A-Z]{0,2}$/.test(key);
+function watchSeen(key, st, where) {
+  st.seenAt = nowS(); st.where = where;
+  if (!st.alerted) { st.alerted = true; watchAlert(key, st); }
+}
+async function watchTick() {
+  const list = watchList(), t = nowS(); if (document.body.classList.contains('panel')) renderWatchStatus(); if (!list.length) return;
+  for (const key of list) {
+    const st = wstate(key), bare = key.replace(/-/g, ''); let p = null;
+    for (const q of planes.values()) if (q.fresh(t) && watchMatches(q, bare) && (!p || (p.remote && !q.remote))) p = q;
+    if (p) watchSeen(key, st, { lat: p.lat, lon: p.lon, alt: p.altFt, ground: p.ground, type: (p.info && p.info.long) || p.desc || p.type, heard: p.src === 'ant' && !p.remote && !!p.tAnt && t - p.tAnt < 20 });
+    if (st.alerted && t - st.seenAt > WATCH_GONE) st.alerted = false;
+  }
+  if (!__NET__ || watch.busy || t < watch.next) return;
+  // ask about the aircraft that was asked about longest ago, among those the page is not tracking right now
+  const due = list.filter((k) => t - wstate(k).seenAt > 30).sort((a, b) => wstate(a).asked - wstate(b).asked)[0];
+  watch.next = t + Math.max(WATCH_GAP, WATCH_EVERY / list.length);
+  if (!due) return;
+  const st = wstate(due); st.asked = t; watch.busy = true;
+  try {
+    const api = relayBase() && !Q.has('posApi') ? relayBase() + '/v2/' : (Q.has('posApi') ? POS_API : '');
+    if (api) {
+      const d = await getJSON(api + (watchAsCallsign(due) ? 'callsign/' : 'reg/') + encodeURIComponent(due) + (MANUAL && fakeT ? '?t=' + fakeT : ''));
+      const ac = aged((d.ac || d.aircraft || []).filter((a) => a && a.lat != null && a.lon != null), d).find((a) => (a.seen_pos || 0) < 120);
+      st.netOk = true;
+      if (ac && watchList().indexOf(due) !== -1) {
+        const ground = ac.alt_baro === 'ground', alt = typeof ac.alt_baro === 'number' ? ac.alt_baro : (typeof ac.alt_geom === 'number' ? ac.alt_geom : 0);
+        watchSeen(due, st, { lat: +ac.lat, lon: +ac.lon, alt, ground, type: ac.desc || ac.t || '', heard: false });
+      }
+    } else st.netOk = false;   // a copy with no relay beside it cannot ask the flight networks
+  } catch (e) { st.netOk = false; }
+  watch.busy = false;
+}
+function watchWhere(w) {
+  if (!w) return '';
+  const bits = [];
+  const type = prettyType(String(w.type || '')); if (type) bits.push(type);
+  bits.push(w.ground ? 'on the ground' : fmtInt(Math.round((w.alt || 0) / 100) * 100) + ' feet');
+  if (w.heard) bits.push('heard by ' + ANT);
+  const near = nearestAirport(w.lat, w.lon, 60), miles = gcDist(C.lat, C.lon, w.lat, w.lon) / MI;
+  if (near) bits.push('near ' + (near[3] || near[2]));
+  if (miles >= 5) bits.push(fmtInt(miles) + ' miles from ' + C.name);
+  return bits.join(', ');
+}
+// The alert: a line at the top of the page that stays until it is dismissed, a short chime, and a notification from the browser
+// when the page is in the background and the viewer has allowed that. Everything shown is set with textContent.
+function watchAlert(key, st) {
+  const box = $('watch'); let row = [...box.children].find((r) => r.dataset.key === key);
+  if (!row) {
+    row = document.createElement('div'); row.className = 'w-row'; row.dataset.key = key;
+    const text = document.createElement('span'), go = document.createElement('button'), close = document.createElement('button');
+    go.type = 'button'; go.textContent = 'Follow'; go.onclick = () => { go.blur(); setFollow(key); dismissWatch(key); };
+    close.type = 'button'; close.className = 'quiet'; close.textContent = 'Dismiss'; close.setAttribute('aria-label', 'Dismiss the alert for ' + key); close.onclick = () => { close.blur(); dismissWatch(key); };
+    row.appendChild(text); row.appendChild(go); row.appendChild(close); box.appendChild(row);
+  }
+  const where = watchWhere(st.where), line = key + (st.where && st.where.ground ? ' has been seen' : ' is in the air') + (where ? ': ' + where : '');
+  row.firstChild.textContent = line; box.hidden = false; watchTitle();
+  chime();
+  if (S.watchNote && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+    try { const n = new Notification('3D sky watch list', { body: line, tag: 'sky3d-' + key }); n.onclick = () => { window.focus(); n.close(); }; } catch (e) { /* not allowed here */ }
+  }
+  renderWatchStatus();
+}
+function dismissWatch(key) { const box = $('watch'); for (const r of [...box.children]) if (r.dataset.key === key) r.remove(); box.hidden = !box.children.length; watchTitle(); }
+function watchTitle() { const first = $('watch').firstChild; document.title = first ? first.dataset.key + ' spotted - 3D sky' : '3D sky'; }
+// a browser plays sound only after the viewer has touched the page, so the sound is made ready on the first key or click
+let audio = null;
+function unlockAudio() {
+  window.removeEventListener('pointerdown', unlockAudio); window.removeEventListener('keydown', unlockAudio);
+  try { const A = window.AudioContext || window.webkitAudioContext; if (A && !audio) audio = new A(); if (audio && audio.state === 'suspended') audio.resume().catch(() => {}); } catch (e) { audio = null; }
+}
+window.addEventListener('pointerdown', unlockAudio); window.addEventListener('keydown', unlockAudio);
+function chime() {
+  if (!S.watchSound || !audio || audio.state !== 'running') return;
+  try {
+    const t0 = audio.currentTime;
+    for (const [f, d] of [[880, 0], [1175, 0.2]]) {
+      const o = audio.createOscillator(), g = audio.createGain(); o.type = 'sine'; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t0 + d); g.gain.exponentialRampToValueAtTime(0.2, t0 + d + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + d + 0.4);
+      o.connect(g); g.connect(audio.destination); o.start(t0 + d); o.stop(t0 + d + 0.45);
+    }
+  } catch (e) { /* no sound */ }
+}
+// the list in the settings: one row per aircraft, with what is known about it
+function watchStatus(key) {
+  const st = watchState.get(key), t = nowS();
+  if (st && t - st.seenAt < 60) return 'Seen now: ' + watchWhere(st.where);
+  if (st && st.seenAt > 0) { const m = Math.round((t - st.seenAt) / 60); return 'Last seen ' + (m < 2 ? 'a minute' : fmtInt(m) + ' minutes') + ' ago'; }
+  if (!__NET__) return 'Not heard by ' + ANT + ' since this page opened';
+  if (!st || st.asked < 0) return 'Waiting to check';
+  if (st.netOk === false) return 'Could not check the flight networks just now';
+  return 'Not seen since this page opened';
+}
+function renderWatch() {
+  const box = $('watchlist'); box.innerHTML = '';
+  watchList().forEach((key) => {
+    const row = document.createElement('div'); row.className = 'place'; row.dataset.key = key;
+    const name = document.createElement('span'); name.textContent = key; const status = document.createElement('small'); status.textContent = watchStatus(key);
+    const del = document.createElement('button'); del.type = 'button'; del.className = 'quiet'; del.textContent = 'Remove'; del.setAttribute('aria-label', 'Remove ' + key + ' from the watch list');
+    del.onclick = () => { S.watch = watchList().filter((k) => k !== key); watchState.delete(key); dismissWatch(key); save(); renderWatch(); $('f-wadd').focus(); };
+    name.appendChild(status); row.appendChild(name); row.appendChild(del); box.appendChild(row);
+  });
+}
+function renderWatchStatus() { for (const row of $('watchlist').children) { const s = row.querySelector('small'), v = watchStatus(row.dataset.key); if (s && s.textContent !== v) s.textContent = v; } }
+function addWatch() {
+  const input = $('f-wadd'), note = $('watch-note'), key = watchKey(input.value);
+  if (!key) { note.textContent = 'Type a tail number such as N2RF or a flight number such as DL1234.'; return; }
+  if (watchList().indexOf(key) !== -1) { note.textContent = key + ' is already on the list.'; return; }
+  if (watchList().length >= WATCH_MAX) { note.textContent = 'That is the limit of ' + WATCH_MAX + ' aircraft. Remove one first.'; return; }
+  S.watch = watchList().concat([key]); save(); input.value = '';
+  note.textContent = key + ' added. You will get an alert on this page when it is seen.';
+  watch.next = 0; renderWatch();
+}
+
 // ---------- camera ----------
 // A pose is where the camera looks (lat, lon, altitude) and where it sits around that point (compass angle, height angle, distance).
 const pose = { lat: C.lat, lon: C.lon, alt: 0, az: 200, el: 26, dist: 160 };
@@ -884,6 +1021,20 @@ function initPanel() {
   $('listen').onclick = () => openListen();
   $('f-follow').onsubmit = (e) => { e.preventDefault(); setFollow($('f-flight').value); $('f-flight').blur(); };
   $('f-stop').onclick = () => setFollow('');
+  renderWatch(); $('f-watch').onsubmit = (e) => { e.preventDefault(); addWatch(); };
+  $('f-wsound').checked = !!S.watchSound; $('f-wsound').onchange = (e) => { S.watchSound = e.target.checked; save(); if (S.watchSound) { unlockAudio(); chime(); } };
+  // a browser shows notifications only for a page at a secure (https) address, and only after the viewer allows them
+  const canNotify = 'Notification' in window && window.isSecureContext;
+  if (!canNotify) { S.watchNote = false; $('f-wnote').disabled = true; $('wnote-note').textContent = 'Notifications need the secure address, the one that starts with https. Alerts still show on this page.'; }
+  else if (Notification.permission === 'denied') S.watchNote = false;
+  $('f-wnote').checked = !!S.watchNote;
+  $('f-wnote').onchange = (e) => {
+    if (!e.target.checked) { S.watchNote = false; save(); return; }
+    Notification.requestPermission().then((r) => {
+      S.watchNote = r === 'granted'; $('f-wnote').checked = S.watchNote; save();
+      $('wnote-note').textContent = S.watchNote ? 'You will get a notification when this page is in the background.' : 'The browser did not allow notifications. Alerts still show on this page.';
+    }).catch(() => { S.watchNote = false; $('f-wnote').checked = false; save(); });
+  };
   $('gear').onclick = () => togglePanel();
   $('close').onclick = () => togglePanel(false);
   let idle = null;
@@ -1132,10 +1283,10 @@ function frame() {
 // ---------- start ----------
 resize(); reorigin(C.lat, C.lon); applyWeather(); updateLook(C.lat, C.lon, simClock || new Date()); initPanel();
 if (S.follow) setFollow(S.follow);
-if (!MANUAL) { poll(); setInterval(followTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
+if (!MANUAL) { poll(); setInterval(followTick, 1000); setInterval(watchTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, watchTick, watchState, watch, addWatch, dismissWatch, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
   net, NET: __NET__ };

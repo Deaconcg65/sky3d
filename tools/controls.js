@@ -1,4 +1,5 @@
-// Drives the version 3.6 controls in Chromium against tools/sim.js: fly heading, key ownership, search, click and follow behavior.
+// Drives the version 3.6 controls and the version 3.7 watch list in Chromium against tools/sim.js: fly heading, key ownership, search,
+// click and follow behavior, watch list alerts.
 // usage: node tools/sim.js 8090 (in another window), then node tools/controls.js. Prints PASS or FAIL per check.
 const { chromium } = require('playwright');
 (async () => {
@@ -99,6 +100,37 @@ const { chromium } = require('playwright');
     ok('following: click then ' + key.toUpperCase() + ' puts the followed caption back', c.kind === 'follow' && !c.clicked && c.flight.replace(/\s/g, '').indexOf(cap[0].slice(3)) !== -1, JSON.stringify(c));
   }
   await page.evaluate(() => window.__sky.setFollow(''));
+  // ---------- version 3.7: the watch list ----------
+  // N2RF is on the list from the start here (the receiver's own screen), and the stand-in network has it over Pennsylvania
+  const sim = (p) => page.evaluate((u) => fetch(u).then((r) => r.json()), 'http://localhost:8090' + p);
+  await page.waitForFunction(() => !!document.querySelector('#watch .w-row[data-key="N2RF"]'), null, { timeout: 30000 }).catch(() => {});
+  const w1 = await page.evaluate(() => ({ list: window.__sky.S.watch, row: (document.querySelector('#watch .w-row[data-key="N2RF"] span') || {}).textContent || '', title: document.title }));
+  ok('watch list starts with N2RF and alerts when the networks see it', w1.list[0] === 'N2RF' && /^N2RF is in the air: .*41,000 feet/.test(w1.row) && /N2RF/.test(w1.title), JSON.stringify(w1));
+  const asked0 = (await sim('/ctl/regasked')).asked; await page.waitForTimeout(12000); const asked1 = (await sim('/ctl/regasked')).asked;
+  ok('an aircraft seen in the last 30 seconds is not asked about again', asked1 === asked0, `${asked0} then ${asked1}`);
+  await page.click('#watch .w-row[data-key="N2RF"] button.quiet'); await page.waitForTimeout(300);
+  ok('Dismiss removes the alert and puts the title back', await page.evaluate(() => !document.querySelector('#watch .w-row') && document.getElementById('watch').hidden && document.title === '3D sky'));
+  await page.evaluate(() => { const s = window.__sky; s.watchState.get('N2RF').seenAt -= 40; s.watch.next = 0; return s.watchTick(); }); await page.waitForTimeout(500);
+  ok('no second alert while the aircraft stays in sight', await page.evaluate(() => !document.querySelector('#watch .w-row')));
+  // gone for 20 minutes, then back: a new alert, and Follow on it follows the aircraft
+  await page.evaluate(() => { const s = window.__sky, st = s.watchState.get('N2RF'); st.seenAt -= 1300; return s.watchTick().then(() => { st.seenAt = -1e9; s.watch.next = 0; return s.watchTick(); }); }); await page.waitForTimeout(500);
+  const back = await page.evaluate(() => !!document.querySelector('#watch .w-row[data-key="N2RF"]'));
+  await page.click('#watch .w-row[data-key="N2RF"] button:not(.quiet)').catch(() => {}); await page.waitForTimeout(300);
+  ok('back after 20 minutes out of sight: a new alert, and Follow follows it', back && await page.evaluate(() => window.__sky.follow.want === 'N2RF' && !document.querySelector('#watch .w-row')));
+  await page.evaluate(() => window.__sky.setFollow(''));
+  // add an aircraft the antenna is hearing, through the settings: the alert comes from the page's own aircraft, with no network question
+  const local = await page.evaluate(() => { const p = [...window.__sky.planes.values()].find((q) => q.fresh(performance.now() / 1000) && q.src === 'ant' && !q.remote && /^[A-Z]{3}\d/.test(q.callsign()) && q.opacity > 0.5); return p && p.callsign(); });
+  const asked2 = (await sim('/ctl/regasked')).asked;
+  await page.keyboard.press('s'); await page.waitForTimeout(400); await page.fill('#f-wadd', local.toLowerCase()); await page.press('#f-wadd', 'Enter'); await page.waitForTimeout(1500);
+  const w2 = await page.evaluate((cs) => ({ list: window.__sky.S.watch, row: (document.querySelector('#watch .w-row[data-key="' + cs + '"] span') || {}).textContent || '', status: [...document.querySelectorAll('#watchlist small')].map((x) => x.textContent) }), local);
+  ok('adding a flight the antenna hears alerts at once, marked as heard by the antenna', w2.list.includes(local) && /heard by your antenna/.test(w2.row) && w2.status.some((x) => /^Seen now/.test(x)) && (await sim('/ctl/regasked')).asked === asked2, JSON.stringify(w2).slice(0, 200));
+  await page.fill('#f-wadd', local); await page.press('#f-wadd', 'Enter'); await page.waitForTimeout(200);
+  ok('the same aircraft is not added twice', await page.evaluate((cs) => window.__sky.S.watch.filter((k) => k === cs).length === 1 && /already on the list/.test(document.getElementById('watch-note').textContent), local));
+  await page.click('#watchlist .place[data-key="' + local + '"] button'); await page.waitForTimeout(300);
+  ok('Remove takes it off the list and clears its alert', await page.evaluate((cs) => !window.__sky.S.watch.includes(cs) && !document.querySelector('#watch .w-row[data-key="' + cs + '"]'), local));
+  const lim = await page.evaluate(() => { const s = window.__sky; s.S.watch = ['N2RF']; for (let i = 0; i < 12; i++) { document.getElementById('f-wadd').value = 'N' + (100 + i) + 'AB'; s.addWatch(); } return { n: s.S.watch.length, note: document.getElementById('watch-note').textContent }; });
+  ok('the list holds at most 10 aircraft', lim.n === 10 && /limit of 10/.test(lim.note), JSON.stringify(lim));
+  await page.evaluate(() => { window.__sky.S.watch = ['N2RF']; }); await page.keyboard.press('Escape'); await page.waitForTimeout(300);
   console.log('errors:', errs.join(' ; ') || 'none');
   await browser.close();
 })();
