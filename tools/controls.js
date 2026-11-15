@@ -220,6 +220,11 @@ const { chromium } = require('playwright');
   const esc = await page.evaluate(() => document.getElementById('mine').hidden);
   await page.keyboard.press('p'); await page.waitForTimeout(200); await page.keyboard.press('p'); await page.waitForTimeout(200);
   ok('Escape closes My places, and so does P again', esc && await page.evaluate(() => document.getElementById('mine').hidden));
+  // the Search button stays on screen; pressing it with My places open swaps one window for the other
+  await page.keyboard.press('p'); await page.waitForTimeout(200); await page.evaluate(() => document.getElementById('findbtn').click()); await page.waitForTimeout(300);
+  const swap = await page.evaluate(() => ({ mine: !document.getElementById('mine').hidden, find: !document.getElementById('find').hidden, typing: document.activeElement === document.getElementById('find-q') }));
+  await page.keyboard.press('Escape'); await page.waitForTimeout(200);
+  ok('Search with My places open closes My places and opens search, ready to type', !swap.mine && swap.find && swap.typing, JSON.stringify(swap));
   // My places open while another copy removes a place: the window shows the new list, and each button still goes to the place it names
   const synced = await page.evaluate(async () => {
     const s = window.__sky, wait = (ms) => new Promise((r) => setTimeout(r, ms)); s.openMine(); await wait(200);
