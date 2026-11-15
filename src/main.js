@@ -555,7 +555,7 @@ const ROUTE_APIS = Q.has('routeApi') ? Q.get('routeApi').split(',').filter(Boole
 const POS_API = Q.get('posApi') || 'https://api.adsb.lol/v2/';
 const routes = new Map();
 // a route worth keeping: two or more airports, and not marked by the service as impossible for where the aircraft is
-const goodRoute = (rt) => rt && Array.isArray(rt._airports) && rt._airports.length >= 2 && rt.plausible !== false ? rt : null;
+const goodRoute = (rt) => rt && Array.isArray(rt._airports) && rt._airports.length >= 2 && rt._airports.every((a) => a && typeof a === 'object') && rt.plausible !== false ? rt : null;
 // Each route service keeps its own table, so a flight one of them does not know is asked of the next one too.
 async function getRoute(p) {
   const cs = p.callsign(); if (!cs || !/^[A-Z]{2,3}\d/.test(cs)) return null;
@@ -579,6 +579,10 @@ async function getRoute(p) {
 // next stop when it is climbing away. The route table is kept by volunteers and airlines reuse flight numbers, so a low
 // aircraft near none of its airports has another flight's route on file, and nothing is shown.
 function routeLeg(rt, p) {
+  const leg = pickLeg(rt, p);
+  return leg && leg[0] && leg[1] && typeof leg[0] === 'object' && typeof leg[1] === 'object' ? leg : null;   // never an airport that is missing
+}
+function pickLeg(rt, p) {
   const ap = rt && rt._airports; if (!ap || ap.length < 2) return null;
   const first = ap[0], last = ap[ap.length - 1];
   if (p.ground || p.altFt >= 6000) return [first, last];
@@ -1116,11 +1120,12 @@ const JUMP_KM = 60;
 const calm = () => !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 function applyCenter(byViewer = true) {
   if (__NET__) setTimeout(() => netTick(true), 50);
-  const from = { lat: pose.lat, lon: pose.lon };
+  const from = { lat: pose.lat, lon: pose.lon }, was = { kind: 'frozen', frozen: Object.assign({}, pose), azU: pose.az };
   C = centerPoint(); reorigin(C.lat, C.lon); for (const p of planes.values()) for (const s of p.trail) s.ep = -1;
   if (shot.kind !== 'follow') {
     const jump = byViewer && gcDist(from.lat, from.lon, C.lat, C.lon) > JUMP_KM;
     begin('wide', jump ? (calm() ? 3 : 8) : 7); shot.hold = 5; shot.jump = jump; hideCaption();
+    prevShot = was;   // start from where the camera is now: the old wide shot would already be measured from the new center
   }
 }
 function initPanel() {
