@@ -280,6 +280,42 @@ const { chromium } = require('playwright');
   });
   { const far = Object.assign({}, jumped); delete far.short; ok('moving the sky far away rises, fades while crossing, and comes down at the new place', far.jump && far.rose && far.maxFade >= 0.99 && !far.crossedSeen && !far.early && far.arrived && far.clear, JSON.stringify(far)); }
   ok('a short move still glides without a fade', jumped.short.started && jumped.short.kind === 'wide' && jumped.short.jump === false && jumped.short.maxFade === 0, JSON.stringify(jumped.short));
+  // ---------- version 3.8.1: the shape picker reads whole type codes, not just their start ----------
+  const shapes = await page.evaluate(() => { const f = window.__sky.modelFor, out = {};
+    for (const [cat, t] of [['A1', 'C172'], ['', 'C172'], ['', 'C177'], ['', 'C17'], ['', 'H25B'], ['', 'H60'], ['', 'H500'], ['', 'A318'], ['', 'A319'], ['', 'A310'], ['', 'B744'], ['', 'A388'], ['A7', '']]) out[cat + ':' + t] = f(cat, t);
+    return out; });
+  ok('a Cessna 172 or 177 is drawn as a small plane, and only the C-17 as the big four-engine jet', shapes['A1:C172'] === 'light' && shapes[':C172'] === 'light' && shapes[':C177'] === 'light' && shapes[':C17'] === 'heavy' && shapes[':B744'] === 'heavy' && shapes[':A388'] === 'heavy', JSON.stringify(shapes));
+  ok('a Hawker H25B is drawn as a jet, while H60, H500 and category A7 stay helicopters', shapes[':H25B'] === 'jet' && shapes[':H60'] === 'heli' && shapes[':H500'] === 'heli' && shapes['A7:'] === 'heli', JSON.stringify(shapes));
+  ok('the A318 and A319 are drawn as narrow bodies and the A310 as a wide body', shapes[':A318'] === 'jet' && shapes[':A319'] === 'jet' && shapes[':A310'] === 'heavy2', JSON.stringify(shapes));
+  // ---------- version 3.8.1: the keyboard comes back to the sky, and the fly keys show while flying ----------
+  const keyState = () => page.evaluate(() => ({ panel: document.body.classList.contains('panel'), mine: !document.getElementById('mine').hidden, kind: window.__sky.shot.kind, focus: document.activeElement.tagName, keys: document.getElementById('flykeys').classList.contains('on') }));
+  await page.keyboard.press('Escape'); await page.waitForTimeout(300); await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+  await page.keyboard.press('s'); await page.waitForTimeout(400); await page.click('#f-cap'); await page.click('#f-cap');
+  await page.keyboard.press('ArrowUp'); await page.waitForTimeout(600);
+  const fk1 = await keyState();
+  ok('after ticking a setting, an arrow key closes the settings and takes the controls', !fk1.panel && fk1.kind === 'fly' && fk1.focus === 'BODY', JSON.stringify(fk1));
+  ok('in fly mode the fly keys show in the corner', fk1.keys, JSON.stringify(fk1));
+  await page.waitForTimeout(7500);
+  const fk2 = await keyState();
+  ok('the fly keys stay for as long as fly mode lasts, not only the first seven seconds', fk2.kind === 'fly' && fk2.keys, JSON.stringify(fk2));
+  await page.keyboard.press('Escape'); await page.waitForTimeout(600);
+  const fk3 = await keyState();
+  ok('the fly keys go away when fly mode ends', fk3.kind !== 'fly' && !fk3.keys, JSON.stringify(fk3));
+  await page.keyboard.press('s'); await page.waitForTimeout(400); await page.focus('#f-cap'); await page.evaluate(() => document.body.classList.remove('panel'));
+  await page.keyboard.press('ArrowUp'); await page.waitForTimeout(400);
+  const fk4 = await keyState();
+  ok('a setting still holding the keyboard after the settings closed no longer swallows the arrows', fk4.kind === 'fly' && fk4.focus === 'BODY', JSON.stringify(fk4));
+  await page.keyboard.press('Escape'); await page.waitForTimeout(400);
+  await page.keyboard.press('s'); await page.waitForTimeout(400); await page.click('#f-cap'); await page.click('#f-cap');
+  await page.mouse.click(60, 200); await page.waitForTimeout(400);
+  const fk5 = await keyState();
+  ok('a click on the sky closes the settings and gives the keyboard back', !fk5.panel && fk5.focus === 'BODY', JSON.stringify(fk5));
+  await page.keyboard.press('ArrowUp'); await page.waitForTimeout(400);
+  ok('after that click the arrows take the controls', (await keyState()).kind === 'fly'); await page.keyboard.press('Escape'); await page.waitForTimeout(400);
+  await page.keyboard.press('p'); await page.waitForTimeout(400); await page.mouse.click(60, 200); await page.waitForTimeout(400);
+  const fk6 = await keyState();
+  ok('a click on the sky closes My places and gives the keyboard back', !fk6.mine && fk6.focus === 'BODY', JSON.stringify(fk6));
+  await page.keyboard.press('Escape'); await page.waitForTimeout(400);
   // ---------- version 3.8: satellite photos on the ground ----------
   // off by default: no photo is asked for and no credit line shows
   const satPage = await browser.newPage({ viewport: { width: 960, height: 540 } }); satPage.on('pageerror', (e) => errs.push('PAGEERROR (satellite): ' + e.message));

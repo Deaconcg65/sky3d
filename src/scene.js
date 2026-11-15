@@ -562,11 +562,13 @@ export const MODELS = {
   light: { make: light, len: 0.5, tips: 0.66, tipY: 0.078, tipZ: 0.11, tail: -0.5, tailY: 0.02, finTop: [0.215, -0.48], belly: [-0.07, 0.1] },
   heli: { make: heli, len: 0.5, tips: 0.1, tipY: 0.0, tipZ: 0.1, tail: -0.5, tailY: 0.03, finTop: [0.185, -0.5], belly: [-0.112, 0.14] },
 };
+// Type codes are matched by their start, so a short code must not also be the start of another aircraft's code:
+// C17 (the C-17) is the start of C172 and C177, H25B is a Hawker jet, not a helicopter, and A318 and A319 are narrow bodies.
 export function modelFor(category, type) {
   const t = (type || '').toUpperCase();
-  if (category === 'A7' || /^(H\d|EC\d|AS\d|B06|B407|B429|R22|R44|R66|S76|S92|A109|A139|A169|UH|H60)/.test(t)) return 'heli';
-  if (/^(B74|A38|A34|IL96|A124|C5M|C17|B52|K35)/.test(t)) return 'heavy';
-  if (category === 'A5' || /^(B77|B78|A33|A35|B76|MD11|DC10|A30|A31)/.test(t)) return 'heavy2';
+  if (category === 'A7' || /^(H\d\d\d?$|EC\d|AS\d|B06|B407|B429|R22|R44|R66|S76|S92|A109|A139|A169|UH)/.test(t)) return 'heli';
+  if (/^(B74|A38|A34|IL96|A124|C5M|C17$|B52|K35)/.test(t)) return 'heavy';
+  if (category === 'A5' || /^(B77|B78|A33|A35|B76|MD11|DC10|A30|A310)/.test(t)) return 'heavy2';
   if (category === 'A1' || /^(C1[5-9]\d|C2\d\d|P28|PA\d|SR2|DA4|BE3[3-6]|BE5|M20|C82|C72)/.test(t)) return 'light';
   return 'jet';
 }

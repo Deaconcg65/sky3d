@@ -1023,6 +1023,7 @@ function updateCaption(t) {
   else if (shot.lock && t - shot.t0 < 9) msg = 'Staying with this aircraft. Press A for the auto tour, or Escape.';
   else if (shot.kind === 'fly' && t - fly.since < 7) msg = 'You have the controls. Drag to look around, arrow keys to move, plus and minus to zoom, A for the auto tour.';
   else if (t - bootT < 14 && shot.kind === 'wide') msg = 'Press H to see what the keys do.';
+  const flying = shot.kind === 'fly'; if ($('flykeys')._on !== flying) { $('flykeys')._on = flying; $('flykeys').classList.toggle('on', flying); }   // the fly keys stay in the corner for as long as fly mode lasts
   if ($('msg')._t !== msg) { $('msg')._t = msg; if (msg) $('msg').textContent = msg; $('msg').classList.toggle('on', !!msg); }
 }
 
@@ -1217,17 +1218,25 @@ function initPanel() {
   window.addEventListener('keydown', (e) => {
     // Keys pressed while a setting has the keyboard: in a box you type into, every key is typing, so only Escape closes the panel.
     // On a menu, a checkbox or a button, S and Escape still close the panel, and every other key is left for the control itself.
-    const el = e.target, tag = el && el.tagName, typing = tag === 'INPUT' && el.type !== 'checkbox';
+    let el = e.target;
+    // A control inside a window that has since closed (the settings, My places, search or the help) still holding the keyboard swallowed
+    // every key, so the arrows did nothing until the sky was clicked. Take the keyboard back from it and treat the key as the page's.
+    if (el && el !== document.body && el.closest && el.blur && ((el.closest('#panel') && !document.body.classList.contains('panel')) || (el.closest('#mine') && $('mine').hidden) || (el.closest('#find') && $('find').hidden) || (el.closest('#help') && $('help').hidden))) { el.blur(); el = document.body; }
+    const tag = el && el.tagName, typing = tag === 'INPUT' && el.type !== 'checkbox';
     if (e.key === 'Escape') { e.preventDefault(); escapeKey(); return; }   // Escape closes the topmost window first, wherever the keyboard focus is
     if (el && el.id === 'find-q') { findKey(e); return; }
     if (!$('mine').hidden) { if ((e.key === 'p' || e.key === 'P') && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); closeMine(); } return; }   // with My places open, only P and Escape do anything; Enter and Space work its buttons
     if (typing) { if (e.key === 'Escape') togglePanel(false); return; }
-    if (tag === 'SELECT' || tag === 'INPUT' || tag === 'BUTTON') { if (e.key === 's' || e.key === 'S' || e.key === 'Escape') { e.preventDefault(); togglePanel(e.key === 'Escape' ? false : undefined); } return; }
+    // An arrow key with the settings open, on a checkbox or a button, closes the settings and moves the sky as usual: after ticking
+    // a setting the sky is still in view beside the settings, and the arrows doing nothing there looked broken.
+    const arrow = e.key.indexOf('Arrow') === 0 && !e.ctrlKey && !e.metaKey && !e.altKey;
+    if (arrow && (tag === 'INPUT' || tag === 'BUTTON') && document.body.classList.contains('panel') && el.closest && el.closest('#panel')) togglePanel(false);
+    else if (tag === 'SELECT' || tag === 'INPUT' || tag === 'BUTTON') { if (e.key === 's' || e.key === 'S' || e.key === 'Escape') { e.preventDefault(); togglePanel(e.key === 'Escape' ? false : undefined); } return; }
     if (e.ctrlKey || e.metaKey || e.altKey) return;   // leave the browser's own shortcuts alone
     const k = e.key, flying = shot.kind === 'fly';
     if (k === 'h' || k === 'H' || k === '?') { e.preventDefault(); toggleHelp(); return; }
     if (!$('help').hidden) return;   // while the help is showing, only H, ? and Escape do anything
-    if (document.body.classList.contains('panel')) { if (k === 's' || k === 'S') togglePanel(); return; }   // with the settings open, only S and Escape do anything
+    if (document.body.classList.contains('panel')) { if (arrow) togglePanel(false); else { if (k === 's' || k === 'S') togglePanel(); return; } }   // with the settings open, only S, Escape and the arrows do anything
     if (!$('find').hidden) return;
     if (e.repeat && !flying && (k === 'f' || k.indexOf('Arrow') === 0)) return;   // a key held down from before Escape must not take the controls again
     // clicked details are ended by clickUntil = 0, so updateCaption puts the current shot's caption back even when Follow keeps the camera
@@ -1249,7 +1258,7 @@ function initPanel() {
     else if (k === 's' || k === 'S' || k === 'Enter') togglePanel();
   });
   // which keys are down right now, for moving about in fly mode
-  window.addEventListener('keydown', (e) => { const tag = e.target && e.target.tagName; if (tag === 'INPUT' || tag === 'SELECT' || !$('help').hidden || !$('find').hidden || !$('mine').hidden || document.body.classList.contains('panel')) return; held.add(e.key); });
+  window.addEventListener('keydown', (e) => { const tag = document.activeElement && document.activeElement !== document.body ? document.activeElement.tagName : ''; if (tag === 'INPUT' || tag === 'SELECT' || !$('help').hidden || !$('find').hidden || !$('mine').hidden || document.body.classList.contains('panel')) return; held.add(e.key); });
   window.addEventListener('keyup', (e) => { held.delete(e.key); });
   window.addEventListener('blur', () => held.clear());
 }
@@ -1265,7 +1274,12 @@ function escapeKey() {
 // ---------- the mouse: drag to look around, wheel to zoom, click for details, double click to stay with an aircraft ----------
 function canvasControls() {
   let drag = null; canvas.style.touchAction = 'none';
-  canvas.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; drag = { x: e.clientX, y: e.clientY, az: 0, el: 0, moved: false }; try { canvas.setPointerCapture(e.pointerId); } catch (x) { /* fine without it */ } });
+  canvas.addEventListener('pointerdown', (e) => {
+    // a click on the sky closes the settings, My places and search, and takes the keyboard back from any control, so the keys work again
+    if (document.body.classList.contains('panel')) togglePanel(false);
+    closeMine(); if (!$('find').hidden) closeFind();
+    const ae = document.activeElement; if (ae && ae !== document.body && ae !== canvas && ae.blur) ae.blur();
+    if (e.button !== 0) return; drag = { x: e.clientX, y: e.clientY, az: 0, el: 0, moved: false }; try { canvas.setPointerCapture(e.pointerId); } catch (x) { /* fine without it */ } });
   canvas.addEventListener('pointermove', (e) => {
     if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     if (!drag.moved) { if (Math.hypot(dx, dy) < 6) return; drag.moved = true; enterFly(); drag.az = fly.az; drag.el = fly.el; }
@@ -1492,7 +1506,7 @@ if (S.follow) setFollow(S.follow);
 if (!MANUAL) { poll(); setInterval(followTick, 1000); setInterval(watchTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { modelFor, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
   net, NET: __NET__ };
