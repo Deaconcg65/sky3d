@@ -1060,7 +1060,9 @@ function addPlace() {
   // Someone who types an address in the name box and leaves the second box empty gets it looked up too.
   if (!where && typedName) { where = typedName; name = ''; }
   if (!where) { note.textContent = 'Type an address, a city or a latitude and longitude in the second box.'; return; }
-  const ll = parseLatLon(where);
+  // only text made of numbers, degree and minute marks and the letters N, S, E and W counts as a latitude and longitude, so an
+  // address with two numbers in it (12 Route 7) is looked up rather than read as 12, 7
+  const ll = /^[\s\d.,;:+\-\u00b0'"\u2032\u2033\u2019\u201dNSEWnsew]+$/.test(where) ? parseLatLon(where) : null;
   if (!ll) { lookPlace(MINE, where, name); return; }
   addMine(name || 'My place', ll.lat, ll.lon);
 }
