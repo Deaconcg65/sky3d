@@ -558,9 +558,13 @@ function setFollow(text) {
   if (follow.want && (shot.lock || shot.kind === 'fly')) leaveControls();   // a flight the viewer asks to follow takes the camera from a locked aircraft or fly mode
 
 }
+// Follow and the watch list recognize an aircraft the same way: callsign, reported registration, registration from the
+// aircraft table, or hex code, with dashes ignored
+const bareReg = (r) => String(r || '').toUpperCase().replace(/-/g, '');
+function planeMatches(p, bare) { return p.callsign() === bare || bareReg(p.reg) === bare || bareReg(p.info && p.info.reg) === bare || p.hex.toUpperCase() === bare; }
 function matchFollow() {
-  const w = follow.want, t = nowS(); let best = null;
-  for (const p of planes.values()) { if (!p.fresh(t)) continue; if (p.callsign() === w || (p.reg || '').replace(/-/g, '') === w || p.hex.toUpperCase() === w) { if (!best || (best.remote && !p.remote)) best = p; } }
+  const w = bareReg(follow.want), t = nowS(); let best = null;
+  for (const p of planes.values()) { if (!p.fresh(t)) continue; if (planeMatches(p, w)) { if (!best || (best.remote && !p.remote)) best = p; } }
   return best;
 }
 async function followTick() {
@@ -595,8 +599,6 @@ const WATCH_GONE = 20 * 60, WATCH_EVERY = 120, WATCH_GAP = 15;
 const watch = { busy: false, next: 0 };
 const watchList = () => (Array.isArray(S.watch) ? S.watch : []);
 function wstate(key) { let st = watchState.get(key); if (!st) { st = { seenAt: -1e9, where: null, asked: -1e9, netOk: null, alerted: false }; watchState.set(key, st); } return st; }
-const bareReg = (r) => String(r || '').toUpperCase().replace(/-/g, '');
-function watchMatches(p, bare) { return p.callsign() === bare || bareReg(p.reg) === bare || bareReg(p.info && p.info.reg) === bare || p.hex.toUpperCase() === bare; }
 // A flight number with an airline code goes to the networks as a callsign, anything else as a registration (tail number)
 const watchAsCallsign = (key) => /^[A-Z]{3}\d{1,4}[A-Z]{0,2}$/.test(key);
 function watchSeen(key, st, where) {
@@ -607,7 +609,7 @@ async function watchTick() {
   const list = watchList(), t = nowS(); if (document.body.classList.contains('panel')) renderWatchStatus(); if (!list.length) return;
   for (const key of list) {
     const st = wstate(key), bare = key.replace(/-/g, ''); let p = null;
-    for (const q of planes.values()) if (q.fresh(t) && watchMatches(q, bare) && (!p || (p.remote && !q.remote))) p = q;
+    for (const q of planes.values()) if (q.fresh(t) && planeMatches(q, bare) && (!p || (p.remote && !q.remote))) p = q;
     if (p) watchSeen(key, st, { lat: p.lat, lon: p.lon, alt: p.altFt, ground: p.ground, type: (p.info && p.info.long) || p.desc || p.type, heard: p.src === 'ant' && !p.remote && !!p.tAnt && t - p.tAnt < 20 });
     if (st.alerted && t - st.seenAt > WATCH_GONE) st.alerted = false;
   }
@@ -1349,7 +1351,7 @@ if (S.follow) setFollow(S.follow);
 if (!MANUAL) { poll(); setInterval(followTick, 1000); setInterval(watchTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
   net, NET: __NET__ };

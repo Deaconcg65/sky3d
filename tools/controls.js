@@ -118,6 +118,14 @@ const { chromium } = require('playwright');
   await page.click('#watch .w-row[data-key="N2RF"] button:not(.quiet)').catch(() => {}); await page.waitForTimeout(300);
   ok('back after 20 minutes out of sight: a new alert, and Follow follows it', back && await page.evaluate(() => window.__sky.follow.want === 'N2RF' && !document.querySelector('#watch .w-row')));
   await page.evaluate(() => window.__sky.setFollow(''));
+  // an aircraft whose tail number comes only from the aircraft table (not its own report): the watch list finds it, and Follow on the alert follows that same aircraft
+  const dbw = await page.evaluate(async () => {
+    const s = window.__sky, t = performance.now() / 1000; const p = [...s.planes.values()].find((q) => q.fresh(t) && q.src === 'ant' && !q.remote && /^[A-Z]{3}\d/.test(q.callsign()) && q.opacity > 0.5);
+    if (!p) return null; p.info = Object.assign({}, p.info || {}, { reg: 'N7DB' }); s.S.watch = ['N7DB']; await s.watchTick();
+    const row = document.querySelector('#watch .w-row[data-key="N7DB"] button:not(.quiet)'); if (row) row.click(); await new Promise((r) => setTimeout(r, 50));
+    const m = s.matchFollow(); const out = { hex: p.hex, alerted: !!row, want: s.follow.want, matched: m && m.hex }; s.setFollow(''); s.S.watch = ['N2RF']; s.watchState.delete('N7DB'); return out;
+  });
+  ok('a tail number known only from the aircraft table: the watch list alerts and Follow finds that aircraft', dbw && dbw.alerted && dbw.want === 'N7DB' && dbw.matched === dbw.hex, JSON.stringify(dbw));
   // add an aircraft the antenna is hearing, through the settings: the alert comes from the page's own aircraft, with no network question
   const local = await page.evaluate(() => { const p = [...window.__sky.planes.values()].find((q) => q.fresh(performance.now() / 1000) && q.src === 'ant' && !q.remote && /^[A-Z]{3}\d/.test(q.callsign()) && q.opacity > 0.5); return p && p.callsign(); });
   const asked2 = (await sim('/ctl/regasked')).asked;
