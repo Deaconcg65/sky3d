@@ -379,7 +379,6 @@ function updatePlane(p, t, dt, night) {
   if (!p.mesh) {
     const kind = modelFor(p.category, p.type);
     p.mesh = new PlaneMesh(kind, paintFor(p.callsign(), p.hex, kind)); p.kind = kind; p.paintKey = p.callsign() + '|' + kind; planeLayer.add(p.mesh.group);
-    if (!p.type && !p.info && db) dbLookup(p);   // an aircraft heard without its type: look it up in the receiver's tables now, so it has its own shape before the camera comes to it
   } else if (p.paintKey !== p.callsign() + '|' + modelFor(p.category, p.type) && t - (p.tPaint || 0) > 5) {
     // the callsign or the aircraft type often arrives a few seconds after the first position, so repaint once it is known.
     // The new shape goes on at once, even with the camera riding on this aircraft (version 3.9): the camera's distance
@@ -389,6 +388,10 @@ function updatePlane(p, t, dt, night) {
     else { const c = paintFor(p.callsign(), p.hex, kind); p.mesh.paint.forEach((col, i) => col.set(c[i])); }
     p.paintKey = p.callsign() + '|' + p.kind;
   }
+  // An aircraft heard without its type: look it up in the receiver's tables, so it has its own shape before the camera comes to it.
+  // This is checked every frame, not only when the shape is first made, because the tables may still be loading when the
+  // first aircraft are drawn. dbLookup marks the aircraft (p.info) at once, so each one is looked up only once.
+  if (!p.type && !p.info && db) dbLookup(p);
   p.camLen = p.camLen ? lerp(p.camLen, p.mesh.len, clamp(dt * 0.5, 0, 1)) : p.mesh.len;   // the size the camera keeps its distance by, easing to a new shape over a few seconds
   const g = p.mesh.group; g.position.copy(p.pos);
   const dist = camera.position.distanceTo(p.pos);
