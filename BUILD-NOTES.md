@@ -31,7 +31,7 @@ A self-contained 3D web page that shows live aircraft from a home Raspberry Pi A
 
 1. Done November 15: version 3.6 reviewed clean by Codex, browser checks passed on Chris's Mac (23 of 23), merged.
 2. On the Raspberry Pi, run the installer line from the README and confirm the settings window ends with the new version. After 3.7 merges this shows "Version 3.7, network edition, November 15, 2026". The relay changed in 3.7, and the installer installs it too.
-3. Version 3.7 (pull request 2, built; see "Done in 3.7"): watch list (first entry N2RF, a Citation CJ4) and typed locations (airport, city or zip first; street addresses only with a privacy notice).
+3. Version 3.7 (pull request 2, built; see "Done in 3.7"). Codex reviewed it three times; two findings, both about Follow on a watch alert, were fixed, and its review of commit da5f3c1 had no findings. Before merging, run node tools/controls.js once on a machine with Chromium. Watch list (first entry N2RF, a Citation CJ4) and typed locations (airport, city or zip first; street addresses only with a privacy notice).
    Decisions from Chris (November 15):
    - Watch list: he wants an alert, and he builds his own list of aircraft to be alerted about whenever one is seen anywhere, not only by the antenna. N2RF stays the first entry.
    - Typed places: yes to an outside lookup service that turns a typed place into a location.
