@@ -1,10 +1,19 @@
-# Build notes: version 3.8.1 (November 15, 2026)
+# Build notes: version 3.9 (November 15, 2026)
 
 Written for whoever picks this up next, including a code reviewer. It records what is done, what is left in order, why some choices were made, and how to build and test. Version 3.7 is pull request https://github.com/Deaconcg65/sky3d/pull/2 (branch v3.7-watch-list into main). Version 3.6 was pull request 1, merged November 15.
 
 ## What this version is
 
 A self-contained 3D web page that shows live aircraft from a home Raspberry Pi ADS-B receiver (readsb and tar1090). Two editions are built from one source: the home edition (antenna only) and the network edition (antenna plus public flight networks, through the relay in relay/relay.py). The page is shared on the internet at skypuppy3d.com through a Cloudflare tunnel, so treat every viewer as untrusted.
+
+## Version 3.9 (November 15, 2026): airport codes, one camera owner, realistic shapes
+
+Branch v3.9-camera, built on top of 3.8.1 (pull request 6 is opened against v3.8.1-shapes and moves to main once 3.8.1 merges).
+
+- Click an airport code to center there (Chris, November 15: "When you zoom out, if you click on a visible airport code it takes you to that airport as center"). A click on a code label makes that airport the center the way picking it from the airport list does, with the usual move (the rise and fade for a far one). The pointer turns to a hand over a label. A click never fights a plane: an aircraft within 16 pixels of the pointer wins, then a label, then the nearest aircraft within the usual 42 pixels. Labels for My places are not clickable. Two browser checks: a label with no aircraft under it centers the sky, and a click right on an aircraft shows it and leaves the center alone.
+- One camera owner. cameraOwner() is the only place that says who has the camera (fly, lock, follow or tour, in that order), and takeCamera() is the only way to hand it on; enterFly, lockOn, autoTour and leaveControls go through it, and the director, Escape and Follow ask cameraOwner. No behaviour was meant to change. A browser check walks the hand-offs: start, F, double click, F again, follow from fly, F while following, Escape while following, A while following, stop following.
+- Realistic shapes. The 747 (any B74x code) has the upper deck hump over the front third of the body, with its own windshield band; the A380 (A38x) has a second deck from nose to tail, so the body is taller than it is wide; both keep four engines and get their own entries in modelFor. The small plane shape (Cessna 172 and friends) has a spinner and a two-blade propeller at the nose. Three browser checks measure the bodies: the 747 is taller over the front than the rear, the A380 is taller than the 747 over the rear, the small plane's propeller reaches past its nose.
+- Not looked at in a browser here (the build machine cannot run one). Chris's eyes on a 747, an A380 and a Cessna are the real check.
 
 ## Version 3.8.1 (November 15, 2026): arrow keys, fly keys, aircraft shapes
 
@@ -76,7 +85,7 @@ Chris reported that My places did not save, on the receiver's own (http) address
    Built: alerts while the page is open. Still open for Chris: an alert when no page is open would need the Pi to watch and send a notification to his phone, which is a bigger piece of work and needs a way to reach him.
 4. Version 3.8: aircraft gallery with realistic shapes (757, Gulfstream, Airbus, Citation CJ4, helicopter), a legend page with airline and military paint, and paint options for other aircraft including silly ones.
    First item for this batch (Chris, November 15): N499KW and N121MS, both Cessna 172s from the flight network, were drawn as four-engine airliners. Cause: modelFor in src/scene.js tests the heavy shapes before the light ones, and its prefix C17 (the C-17 Globemaster) also matches C170 to C177, so every Cessna 172 gets the four-engine shape. Not new in 3.8; the same line has been on main since 3.4. Fix: match C17 only as the whole code, and add a browser check that C172 and C177 come back light. Two more prefix clashes in the same function to fix with it: H\d sends the Hawker H25B business jet to the helicopter shape, and A31 sends the A318 and A319 narrow bodies to the wide-body shape.
-   Still to come after 3.8.1, in order: camera single owner (tour, follow, fly or lock), then the realistic shapes below, then:
+   Still to come after 3.9 (airport codes, camera owner and the 747, A380 and small prop are in 3.9), in order:
    - Gallery legend page with airline and military paint, and the paint options.
    - Regional flights shown as the airline passengers know them: Republic (RPA) flies for American, Delta and United, SkyWest (SKW) and Mesa for several, so a regional with more than one partner needs the partner from the route or flight number; when unsure, say "Republic Airways, flying for a partner" rather than guess.
    - Aircraft photo: a Photos button on the caption that opens a pop-up with a photo from Planespotters by registration or hex, with its photographer credit and link; Escape closes it; a README privacy line that the viewer's browser asks Planespotters. If Planespotters needs a key or an account, stop and ask Chris.

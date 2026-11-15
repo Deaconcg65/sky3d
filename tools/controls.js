@@ -284,7 +284,7 @@ const { chromium } = require('playwright');
   const shapes = await page.evaluate(() => { const f = window.__sky.modelFor, out = {};
     for (const [cat, t] of [['A1', 'C172'], ['', 'C172'], ['', 'C177'], ['', 'C17'], ['', 'H25B'], ['', 'H60'], ['', 'H500'], ['', 'A318'], ['', 'A319'], ['', 'A310'], ['', 'B744'], ['', 'A388'], ['A7', '']]) out[cat + ':' + t] = f(cat, t);
     return out; });
-  ok('a Cessna 172 or 177 is drawn as a small plane, and only the C-17 as the big four-engine jet', shapes['A1:C172'] === 'light' && shapes[':C172'] === 'light' && shapes[':C177'] === 'light' && shapes[':C17'] === 'heavy' && shapes[':B744'] === 'heavy' && shapes[':A388'] === 'heavy', JSON.stringify(shapes));
+  ok('a Cessna 172 or 177 is drawn as a small plane, the C-17 as a four-engine jet, and the 747 and A380 each as their own shape', shapes['A1:C172'] === 'light' && shapes[':C172'] === 'light' && shapes[':C177'] === 'light' && shapes[':C17'] === 'heavy' && shapes[':B744'] === 'b747' && shapes[':A388'] === 'a380', JSON.stringify(shapes));
   ok('a Hawker H25B is drawn as a jet, while H60, H500 and category A7 stay helicopters', shapes[':H25B'] === 'jet' && shapes[':H60'] === 'heli' && shapes[':H500'] === 'heli' && shapes['A7:'] === 'heli', JSON.stringify(shapes));
   ok('the A318 and A319 are drawn as narrow bodies and the A310 as a wide body', shapes[':A318'] === 'jet' && shapes[':A319'] === 'jet' && shapes[':A310'] === 'heavy2', JSON.stringify(shapes));
   // ---------- version 3.8.1: the keyboard comes back to the sky, and the fly keys show while flying ----------
@@ -316,6 +316,66 @@ const { chromium } = require('playwright');
   const fk6 = await keyState();
   ok('a click on the sky closes My places and gives the keyboard back', !fk6.mine && fk6.focus === 'BODY', JSON.stringify(fk6));
   await page.keyboard.press('Escape'); await page.waitForTimeout(400);
+  // ---------- version 3.9: the camera has one owner at a time ----------
+  const owners = await page.evaluate(() => {
+    const s = window.__sky, out = [], ps = [...s.planes.values()].filter((q) => q.lat !== null && q.opacity > 0.5 && q.callsign() && !q.remote);
+    const note = (step) => out.push(step + ':' + s.cameraOwner());
+    s.setFollow(''); s.autoTour(); note('start');
+    s.enterFly(); note('F'); s.lockOn(ps[0]); note('double click'); s.enterFly(); note('F again');
+    s.setFollow(ps[1].callsign()); s.matchFollow(); s.follow.hex = s.matchFollow().hex; s.follow.state = 'on'; note('follow from fly');
+    s.enterFly(); note('F while following'); s.leaveControls(); note('Escape while following');
+    s.autoTour(); note('A while following'); s.setFollow(''); note('stop following');
+    return out.join(' ');
+  });
+  ok('the camera has one owner at a time and each key hands it on as before', owners === 'start:tour F:fly double click:lock F again:fly follow from fly:follow F while following:fly Escape while following:follow A while following:tour stop following:tour', owners);
+  // ---------- version 3.9: a click on an airport code centers the sky there ----------
+  await page.evaluate(() => { const s = window.__sky; s.S.center = 'MID'; s.applyCenter(false); s.goWide(); });
+  await page.waitForTimeout(9000);
+  // a label on screen with no aircraft right under it, for an airport that is not the center now
+  const spot = await page.evaluate(() => {
+    const s = window.__sky, cam = s.camera, w = innerWidth, h = innerHeight; cam.updateMatrixWorld();
+    for (const l of s.labels) {
+      if (!l.a) continue; const v = l.sprite.position.clone().project(cam); if (v.z > 1 || v.z < -1) continue;
+      const x = (v.x * 0.5 + 0.5) * w, y = (-v.y * 0.5 + 0.5) * h - 0.9 * 0.021 * h;
+      if (x < 40 || x > w - 420 || y < 40 || y > h - 80) continue;
+      if (s.airportLabelAt(x, y) !== l.a) continue;
+      const busy = [...s.planes.values()].some((p) => { if (p.lat === null || p.opacity < 0.3) return false; const q = p.pos.clone().project(cam); return Math.hypot((q.x * 0.5 + 0.5) * w - x, (-q.y * 0.5 + 0.5) * h - y) < 24; });
+      if (!busy) return { x, y, code: l.a[0] };
+    }
+    return null;
+  });
+  if (!spot) ok('an airport code label is on screen to click', false, 'none found');
+  else {
+    await page.mouse.click(spot.x, spot.y); await page.waitForTimeout(500);
+    const after = await page.evaluate(() => { const s = window.__sky; return { center: s.S.center, other: s.S.other, clicked: !!s.clicked }; });
+    ok('a click on an airport code label centers the sky on that airport', (after.center === spot.code || (after.center === 'OTHER' && after.other === spot.code)) && !after.clicked, JSON.stringify({ spot, after }));
+  }
+  // an aircraft right under the pointer still gets the click, even where a label is close by
+  await page.waitForTimeout(8000);
+  const planeFirst = await page.evaluate(() => {
+    const s = window.__sky, cam = s.camera, w = innerWidth, h = innerHeight, before = s.S.center + ':' + s.S.other; cam.updateMatrixWorld();
+    const p = [...s.planes.values()].find((q) => { if (q.lat === null || q.opacity < 0.5 || !q.fresh(performance.now() / 1000)) return false; const v = q.pos.clone().project(cam); return v.z < 1 && v.z > -1 && Math.abs(v.x) < 0.8 && Math.abs(v.y) < 0.8; });
+    if (!p) return { none: true };
+    const v = p.pos.clone().project(cam); s.clickAt((v.x * 0.5 + 0.5) * w, (-v.y * 0.5 + 0.5) * h);
+    return { got: s.clicked === p, same: before === s.S.center + ':' + s.S.other };
+  });
+  ok('a click right on an aircraft shows that aircraft and does not move the sky', planeFirst.got && planeFirst.same, JSON.stringify(planeFirst));
+  await page.evaluate(() => { const s = window.__sky; s.S.center = 'MID'; s.save(); s.applyCenter(false); });
+  await page.keyboard.press('Escape'); await page.waitForTimeout(400);
+  // ---------- version 3.9: realistic shapes ----------
+  const shp = await page.evaluate(() => {
+    const s = window.__sky, out = {};
+    for (const k of ['b747', 'a380', 'heavy', 'light', 'jet']) {
+      const m = new s.PlaneMesh(k, s.paintFor('BAW1', 'abc123', k)); const g = m.mesh.geometry; g.computeBoundingBox();
+      const b = g.boundingBox, pos = g.attributes.position.array; let frontTop = -1, rearTop = -1;
+      for (let i = 0; i < pos.length; i += 3) { const x = pos[i], y = pos[i + 1], z = pos[i + 2]; if (Math.abs(x) > 0.03) continue; if (z > 0.2 && z < 0.35) frontTop = Math.max(frontTop, y); if (z > -0.25 && z < -0.05) rearTop = Math.max(rearTop, y); }
+      out[k] = { frontTop: +frontTop.toFixed(3), rearTop: +rearTop.toFixed(3), front: +b.max.z.toFixed(3), len: m.len }; m.dispose && m.dispose();
+    }
+    return out;
+  });
+  ok('the 747 has a hump: its body is taller over the front than over the rear, unlike the plain four-engine jet', shp.b747.frontTop > shp.b747.rearTop + 0.01 && Math.abs(shp.heavy.frontTop - shp.heavy.rearTop) < 0.005, JSON.stringify(shp));
+  ok('the A380 has a double deck the whole length: taller than the 747 over the rear and as tall at the front', shp.a380.rearTop > shp.b747.rearTop + 0.01 && shp.a380.frontTop >= shp.b747.frontTop - 0.005, JSON.stringify(shp));
+  ok('the small plane has a propeller at its nose, ahead of where its body ends', shp.light.front > 0.5, JSON.stringify(shp.light));
   // ---------- version 3.8: satellite photos on the ground ----------
   // off by default: no photo is asked for and no credit line shows
   const satPage = await browser.newPage({ viewport: { width: 960, height: 540 } }); satPage.on('pageerror', (e) => errs.push('PAGEERROR (satellite): ' + e.message));

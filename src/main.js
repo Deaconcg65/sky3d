@@ -616,7 +616,7 @@ function setFollow(text) {
   const dashed = String(text || '').toUpperCase().replace(/[^A-Z0-9-]/g, '');
   follow.tour = false; follow.want = parseFlight(text); follow.reg = /^[A-Z0-9]{1,3}-[A-Z0-9]{1,5}$/.test(dashed) ? dashed : ''; follow.hex = null; follow.state = follow.want ? 'looking' : 'off'; follow.since = nowS(); follow.lastRemote = 0;
   S.follow = follow.reg || follow.want; save(); $('f-flight').value = S.follow; $('f-stop').hidden = !follow.want;
-  if (follow.want && (shot.lock || shot.kind === 'fly')) leaveControls();   // a flight the viewer asks to follow takes the camera from a locked aircraft or fly mode
+  const o = cameraOwner(); if (follow.want && (o === 'lock' || o === 'fly')) leaveControls();   // a flight the viewer asks to follow takes the camera from a locked aircraft or fly mode
 
 }
 // Follow and the watch list recognize an aircraft the same way: callsign, reported registration, registration from the
@@ -799,20 +799,35 @@ function begin(kind, dur, plane) {
 function goWide() { begin('wide', 9); shot.hold = 6; hideCaption(); }
 function startVisit(p) { begin('visit', 10, p); recent.push(p.hex); while (recent.length > 5) recent.shift(); prepareCaption(p); }
 function startFollow(p) { begin('follow', clamp(9 + gcDist(pose.lat, pose.lon, p.rLat, p.rLon) / 50, 11, 24), p); prepareCaption(p); }
-function enterFly() {
-  const t = nowS(); fly.last = t;
-  if (shot.kind === 'fly') return;
-  Object.assign(fly, { lat: pose.lat, lon: pose.lon, alt: pose.alt, az: pose.az, el: pose.el, dist: pose.dist, since: t });
-  paused = false; hideCaption(); begin('fly', 0.01); prevShot = null;   // start exactly where the camera is, with no glide
+// ---------- who has the camera ----------
+// The camera has one owner at a time, and this is the only place that says which:
+//   fly     the viewer has the controls (F, an arrow key, a drag)
+//   lock    the viewer double-clicked an aircraft or picked a search result, and the camera stays with it
+//   follow  a flight being followed has been found and A has not paused it
+//   tour    the auto tour: wide views, and visits to one aircraft after another
+// The director in updateCamera, Escape and Follow all ask cameraOwner, and every change of owner goes through takeCamera,
+// so a new way to take the camera (the watch list, the gallery) is one more case here rather than flags spread through the code.
+function cameraOwner() { return shot.kind === 'fly' ? 'fly' : shot.lock ? 'lock' : followOwns() && planes.get(follow.hex) ? 'follow' : 'tour'; }
+function takeCamera(owner, p) {
+  const t = nowS();
+  if (owner === 'fly') {
+    fly.last = t; if (shot.kind === 'fly') return;
+    Object.assign(fly, { lat: pose.lat, lon: pose.lon, alt: pose.alt, az: pose.az, el: pose.el, dist: pose.dist, since: t });
+    paused = false; hideCaption(); begin('fly', 0.01); prevShot = null;   // start exactly where the camera is, with no glide
+    return;
+  }
+  clicked = null; clickUntil = 0; paused = false;
+  if (owner === 'lock') { begin('visit', 6, p); shot.lock = true; recent.push(p.hex); while (recent.length > 5) recent.shift(); prepareCaption(p); }
+  else if (owner === 'follow') { follow.tour = false; const fp = planes.get(follow.hex); if (fp) startFollow(fp); else goWide(); }
+  else goWide();
 }
+function enterFly() { takeCamera('fly'); }
 // Zoom in on one aircraft and stay with it until the viewer says otherwise (double click, a search result)
-function lockOn(p) {
-  clicked = null; clickUntil = 0; paused = false; begin('visit', 6, p); shot.lock = true;
-  recent.push(p.hex); while (recent.length > 5) recent.shift(); prepareCaption(p);
-}
-function autoTour() { clicked = null; clickUntil = 0; paused = false; if (follow.want) follow.tour = true; goWide(); }
+function lockOn(p) { takeCamera('lock', p); }
+// A hands the camera to the tour and pauses Follow until a flight is followed again
+function autoTour() { if (follow.want) follow.tour = true; takeCamera('tour'); }
 // leaving fly mode or a locked aircraft: go back to following a flight if one is being followed, otherwise to the tour
-function leaveControls() { const fp = followOwns() && planes.get(follow.hex); clicked = null; clickUntil = 0; paused = false; if (fp) startFollow(fp); else goWide(); }
+function leaveControls() { takeCamera(followOwns() && planes.get(follow.hex) ? 'follow' : 'tour'); }
 function flyStep(dt) {
   if (shot.kind !== 'fly') return;
   const mv = (held.has('ArrowUp') ? 1 : 0) - (held.has('ArrowDown') ? 1 : 0), turn = (held.has('ArrowRight') ? 1 : 0) - (held.has('ArrowLeft') ? 1 : 0);
@@ -828,7 +843,7 @@ function flyStep(dt) {
 function zoomFly(f) { enterFly(); fly.dist = clamp(fly.dist * f, 0.15, 700); fly.last = nowS(); }
 const PV = new THREE.Vector3();
 // the aircraft nearest to a point on the screen, if one is close enough to mean it
-function planeAt(x, y) {
+function planeAt(x, y, reach = 42) {
   const t = nowS(), w = window.innerWidth, h = window.innerHeight; let best = null, bd = 1e9;
   camera.updateMatrixWorld();
   for (const p of planes.values()) {
@@ -838,10 +853,35 @@ function planeAt(x, y) {
     const d = Math.hypot(sx - x, sy - y);
     if (d < bd) { bd = d; best = p; }
   }
-  return bd < 42 ? best : null;
+  return bd < reach ? best : null;
 }
+// The airport whose code label is under the pointer. Labels sit just above their airport and keep the same size on screen:
+// each is 0.021 of the screen's height tall, drawn from 0.4 to 1.4 of its height above the airport's own point.
+function airportLabelAt(x, y) {
+  const w = window.innerWidth, h = window.innerHeight, lh = 0.021 * h; let best = null, bd = 1e9;
+  camera.updateMatrixWorld();
+  for (const l of labels) {
+    if (!l.a || l.sprite.material.opacity < 0.05) continue;
+    PV.copy(l.sprite.position).project(camera); if (PV.z > 1 || PV.z < -1) continue;
+    const sx = (PV.x * 0.5 + 0.5) * w, sy = (-PV.y * 0.5 + 0.5) * h, lw = lh * l.sprite.userData.aspect;
+    const top = sy - 1.4 * lh - 4, bottom = sy - 0.4 * lh + 4;
+    if (x < sx - lw / 2 - 4 || x > sx + lw / 2 + 4 || y < top || y > bottom) continue;
+    const d = Math.hypot(x - sx, y - (top + bottom) / 2); if (d < bd) { bd = d; best = l.a; }
+  }
+  return best;
+}
+// Make an airport the center of the sky, the way picking it from the list does, with the usual move there
+function centerOnAirport(a) {
+  if (PRESETS.some((x) => x[0] === a[0])) S.center = a[0]; else { S.center = 'OTHER'; S.other = a[0]; $('f-other').value = S.other; $('other-note').textContent = a[2] + (a[3] ? ', ' + a[3] : ''); }
+  save(); buildCenterOptions(); applyCenter();
+}
+// A click on an aircraft shows its details. An aircraft right under the pointer comes first, then an airport code label,
+// which centers the sky on that airport, then the nearest aircraft within reach, so a label never steals a click meant for a
+// plane landing beside it, and a plane passing near a label does not stop the label from working.
 function clickAt(x, y) {
-  const p = planeAt(x, y);
+  const near = planeAt(x, y, 16);
+  if (!near) { const a = airportLabelAt(x, y); if (a) { clicked = null; clickUntil = 0; centerOnAirport(a); return; } }
+  const p = near || planeAt(x, y);
   if (!p) { clickUntil = 0; return; }   // a click on empty sky puts the details away
   clicked = p; clickUntil = nowS() + S.clickSecs; prepareCaption(p);
 }
@@ -899,9 +939,10 @@ const B_E = new THREE.Vector3(), B_N = new THREE.Vector3(), B_U = new THREE.Vect
 function updateCamera(t) {
   // what to look at next
   const el = t - shot.t0;
-  if (shot.kind === 'fly') { if (S.flyBack > 0 && t - fly.last > S.flyBack) leaveControls(); }
-  else if (shot.lock) { const lp = shot.plane; if (!lp || !planes.has(lp.hex) || lp.opacity < 0.25 || !lp.fresh(t)) leaveControls(); }
-  else if (followOwns() && planes.get(follow.hex)) {
+  const owner = cameraOwner();
+  if (owner === 'fly') { if (S.flyBack > 0 && t - fly.last > S.flyBack) leaveControls(); }
+  else if (owner === 'lock') { const lp = shot.plane; if (!lp || !planes.has(lp.hex) || lp.opacity < 0.25 || !lp.fresh(t)) leaveControls(); }
+  else if (owner === 'follow') {
     if (shot.kind !== 'follow' || shot.plane !== planes.get(follow.hex)) { if (el > shot.dur) startFollow(planes.get(follow.hex)); }
     else if (el > shot.dur && t - shot.tSub > 38) { livePose(shot, t, TP); shot.subFrom = [TP.dist, TP.el]; shot.sub++; shot.tSub = t; shot.subT = t; }
   } else if (shot.kind === 'wide') {
@@ -1268,7 +1309,7 @@ function escapeKey() {
   else if (!$('find').hidden) closeFind();
   else if (!$('mine').hidden) closeMine();
   else if (document.body.classList.contains('panel')) togglePanel(false);
-  else if (shot.kind === 'fly' || shot.lock) leaveControls();
+  else if (cameraOwner() === 'fly' || cameraOwner() === 'lock') leaveControls();
   else if (clicked) clickUntil = 0;
 }
 // ---------- the mouse: drag to look around, wheel to zoom, click for details, double click to stay with an aircraft ----------
@@ -1281,7 +1322,7 @@ function canvasControls() {
     const ae = document.activeElement; if (ae && ae !== document.body && ae !== canvas && ae.blur) ae.blur();
     if (e.button !== 0) return; drag = { x: e.clientX, y: e.clientY, az: 0, el: 0, moved: false }; try { canvas.setPointerCapture(e.pointerId); } catch (x) { /* fine without it */ } });
   canvas.addEventListener('pointermove', (e) => {
-    if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (!drag) { const over = !planeAt(e.clientX, e.clientY, 16) && airportLabelAt(e.clientX, e.clientY); const cur = over ? 'pointer' : ''; if (canvas.style.cursor !== cur) canvas.style.cursor = cur; return; } const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     if (!drag.moved) { if (Math.hypot(dx, dy) < 6) return; drag.moved = true; enterFly(); drag.az = fly.az; drag.el = fly.el; }
     fly.az = drag.az + dx * 0.25; fly.el = clamp(drag.el + dy * 0.25, 3, 88); fly.last = nowS();
   });
@@ -1506,7 +1547,7 @@ if (S.follow) setFollow(S.follow);
 if (!MANUAL) { poll(); setInterval(followTick, 1000); setInterval(watchTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { modelFor, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { save, modelFor, cameraOwner, airportLabelAt, centerOnAirport, get labels() { return labels; }, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
   net, NET: __NET__ };
