@@ -302,7 +302,8 @@ function updateCorner(date) {
     let ant = 0, nw = 0;
     for (const p of planes.values()) if (p.fresh(t) && !p.remote && (!away || gcDist(mid.lat, mid.lon, p.lat, p.lon) < reach)) { if (p.tAnt && t - p.tAnt < 20) ant++; else nw++; }
     const pl = (n) => n + (n === 1 ? ' aircraft' : ' aircraft');
-    set('k-src', S.src === 'antenna' ? (dataBase ? (away ? ANT[0].toUpperCase() + ANT.slice(1) + ' is far from here' : pl(ant) + ' heard by ' + ANT) : '') : !dataBase || S.src === 'network' ? (netAnswering() ? pl(nw) + ' from the flight network' : '') : away ? (netAnswering() ? pl(nw) + ' from the flight network, ' + ANT + ' is far from here' : ANT[0].toUpperCase() + ANT.slice(1) + ' is far from here') : netAnswering() ? ant + ' by ' + ANT + ', ' + nw + ' more from the flight network' : pl(ant) + ' heard by ' + ANT);
+    const far = away && ant === 0;   // say the antenna is far away only when it hears nothing around the sky shown
+    set('k-src', S.src === 'antenna' ? (dataBase ? (far ? ANT[0].toUpperCase() + ANT.slice(1) + ' is far from here' : pl(ant) + ' heard by ' + ANT) : '') : !dataBase || S.src === 'network' ? (netAnswering() ? pl(nw) + ' from the flight network' : '') : far ? (netAnswering() ? pl(nw) + ' from the flight network, ' + ANT + ' is far from here' : ANT[0].toUpperCase() + ANT.slice(1) + ' is far from here') : netAnswering() ? ant + ' by ' + ANT + ', ' + nw + ' more from the flight network' : pl(ant) + ' heard by ' + ANT);
   }
 }
 
