@@ -619,6 +619,7 @@ export const MODELS = {
   light: { make: light, len: 0.5, tips: 0.66, tipY: 0.078, tipZ: 0.11, tail: -0.5, tailY: 0.02, finTop: [0.215, -0.48], belly: [-0.07, 0.1] },
   b757: { make: () => jet(2, '757'), len: 1.2, tips: 0.512, tipY: 0.05, tipZ: -0.2, tail: -0.5, tailY: 0.03, finTop: [0.225, -0.49], belly: [-0.054, 0.02] },
   turbo: { make: () => turboprop(true), len: 0.68, tips: 0.62, tipY: 0.06, tipZ: 0.055, tail: -0.5, tailY: 0.03, finTop: [0.215, -0.5], belly: [-0.062, 0.0] },
+  turbolow: { make: () => turboprop(false), len: 0.68, tips: 0.62, tipY: -0.022, tipZ: 0.055, tail: -0.5, tailY: 0.03, finTop: [0.215, -0.5], belly: [-0.062, 0.0] },
   kingair: { make: () => turboprop(false), len: 0.42, tips: 0.62, tipY: -0.022, tipZ: 0.055, tail: -0.5, tailY: 0.03, finTop: [0.215, -0.5], belly: [-0.062, 0.0] },
   heli: { make: heli, len: 0.5, tips: 0.1, tipY: 0.0, tipZ: 0.1, tail: -0.5, tailY: 0.03, finTop: [0.185, -0.5], belly: [-0.112, 0.14] },
 };
@@ -635,8 +636,10 @@ export function modelFor(category, type) {
   // business jets: Citations, Challengers, Gulfstreams, Global Express, Phenoms, Learjets, Falcons, Hawkers, the PC-24 and the HondaJet.
   // (A three-engine Falcon 7X or 900 is drawn with two; the rear engines are what make the shape.)
   if (/^(C25|C50|C51|C52|C55|C56|C65|C68|C70|C75|CL30|CL35|CL60|GLF|GL5T|GL6T|GL7T|GLEX|GA5C|GA6C|GA7C|GA8C|E50P|E55P|LJ\d|FA\d|F2TH|F900|H25|PC24|HDJT|PRM1|BE40|G150|G280|ASTR|GALX|EA50)/.test(t)) return 'biz';
-  // twin turboprops (version 3.11): ATRs, Dash 8s, Saabs, Dorniers and the like with the wing on top; King Airs and their cousins with it below
-  if (/^(AT4|AT7|DH8|SF34|SB20|D328|E120|F50|SW4|C212|CN35|DHC6)/.test(t)) return 'turbo';
+  // twin turboprops (version 3.11): ATRs, Dash 8s, Dorniers, the Fokker 50 and the like with the wing on top; the Saab 340 and
+  // 2000, Brasilia, Jetstream 31 and 41 and Metro, airliner sized with it below; King Airs and their cousins smaller, with it below
+  if (/^(AT4|AT7|DH8|D328|F50|C212|CN35|DHC6)/.test(t)) return 'turbo';
+  if (/^(SF34|SB20|E120|JS31|JS32|JS41|SW4)/.test(t)) return 'turbolow';
   if (/^(BE20|BE30|B350|BE9L|BE9T|BE99|B190|BE10|P180|C425|C441|MU2|PAY\d|AC\d\d|PA31T)/.test(t)) return 'kingair';
   if (category === 'A1' || /^(C1[5-9]\d|C2\d\d|P28|PA\d|SR2|DA4|BE3[3-6]|BE5|M20|C82|C72|PC12|TBM\d|P46T|M600|PC6)/.test(t)) return 'light';   // single engine, the PC-12 and TBM turboprops included
   return 'jet';
