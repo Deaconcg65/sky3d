@@ -6,7 +6,7 @@ export const AIRLINES = {
   AAY: ['G4', 'Allegiant Air', 0xf58220], SCX: ['SY', 'Sun Country Airlines', 0xf58220], MXY: ['MX', 'Breeze Airways', 0x2d6cdf],
   VXP: ['XP', 'Avelo Airlines', 0x5b2d8e], RPA: ['YX', 'Republic Airways', 0x8a94a0], EDV: ['9E', 'Endeavor Air', 0xc8102e],
   ENY: ['MQ', 'Envoy Air', 0x2a6ebb], JIA: ['OH', 'PSA Airlines', 0x2a6ebb], PDT: ['PT', 'Piedmont Airlines', 0x2a6ebb],
-  SKW: ['OO', 'SkyWest Airlines', 0x7a8793], ASH: ['YV', 'Mesa Airlines', 0x7a8793], GJS: ['G7', 'GoJet Airlines', 0x1b4f9c],
+  SKW: ['OO', 'SkyWest Airlines', 0x7a8793], ASH: ['YV', 'Mesa Airlines, part of Republic Airways', 0x7a8793], GJS: ['G7', 'GoJet Airlines', 0x1b4f9c],
   UCA: ['C5', 'CommuteAir', 0x1b4f9c], QXE: ['QX', 'Horizon Air', 0x0b3d5b], KAP: ['9K', 'Cape Air', 0x1c75bc], FDX: ['FX', 'FedEx', 0x4d148c], UPS: ['5X', 'UPS', 0x5a3a1e],
   GTI: ['5Y', 'Atlas Air', 0x1b3a6b], ABX: ['GB', 'ABX Air', 0x8a94a0], ATN: ['8C', 'Air Transport International', 0x8a94a0],
   ACA: ['AC', 'Air Canada', 0xd22630], JZA: ['QK', 'Jazz', 0xd22630], WJA: ['WS', 'WestJet', 0x00a9a5], POE: ['PD', 'Porter Airlines', 0x1d3557],
@@ -87,12 +87,13 @@ export const LIVERY = {
 };
 LIVERY.LAN = LIVERY.TAM;
 // Regional airlines that always fly in one partner's colours.
-export const PAINT_AS = { EDV: 'DAL', ENY: 'AAL', JIA: 'AAL', PDT: 'AAL', GJS: 'UAL', UCA: 'UAL', JZA: 'ACA', QXE: 'ASA' };
+// Mesa joined Republic Airways in November 2025 and flies only for United, under its own callsign (version 3.11).
+export const PAINT_AS = { EDV: 'DAL', ENY: 'AAL', JIA: 'AAL', PDT: 'AAL', GJS: 'UAL', UCA: 'UAL', JZA: 'ACA', QXE: 'ASA', ASH: 'UAL' };
 // Regional airlines that fly for several partners (version 3.10). The callsign does not say which, but the flight number is
 // the partner's own (RPA5604 is sold as Delta 5604), and nearly every such flight starts or ends at one of the partner's hubs.
 // So when only one of the operator's partners has a hub at either end of the route, that partner is named. Otherwise the
 // caption says the airline is flying for a partner, and the paint stays neutral.
-export const PARTNERS = { RPA: ['AAL', 'DAL', 'UAL'], SKW: ['AAL', 'DAL', 'UAL', 'ASA'], ASH: ['UAL'] };
+export const PARTNERS = { RPA: ['AAL', 'DAL', 'UAL'], SKW: ['AAL', 'DAL', 'UAL', 'ASA'] };
 // Version 3.11: where a public source shows a regional's flight numbers for one partner, the number decides first. Only ranges
 // with a source are listed here, and the hub rule above still covers everything else. Republic: 4300 to 4699 is American
 // (Pittsburgh International Airport's Blue Sky News, 2020; RPA4466 LGA to BOS is sold as American 4466 today). Airlines move
