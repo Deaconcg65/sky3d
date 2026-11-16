@@ -331,20 +331,27 @@ const { chromium } = require('playwright');
   // ---------- version 3.9: a click on an airport code centers the sky there ----------
   await page.evaluate(() => { const s = window.__sky; s.S.center = 'MID'; s.applyCenter(false); s.goWide(); });
   await page.waitForTimeout(9000);
-  // a label on screen with no aircraft right under it, for an airport that is not the center now
-  const spot = await page.evaluate(() => {
-    const s = window.__sky, cam = s.camera, w = innerWidth, h = innerHeight; cam.updateMatrixWorld();
-    for (const l of s.labels) {
-      if (!l.a) continue; const v = l.sprite.position.clone().project(cam); if (v.z > 1 || v.z < -1) continue;
-      const x = (v.x * 0.5 + 0.5) * w, y = (-v.y * 0.5 + 0.5) * h - 0.9 * 0.021 * h;
-      if (x < 40 || x > w - 420 || y < 40 || y > h - 80) continue;
-      if (s.airportLabelAt(x, y) !== l.a) continue;
-      const busy = [...s.planes.values()].some((p) => { if (p.lat === null || p.opacity < 0.3) return false; const q = p.pos.clone().project(cam); return Math.hypot((q.x * 0.5 + 0.5) * w - x, (-q.y * 0.5 + 0.5) * h - y) < 24; });
-      if (!busy) return { x, y, code: l.a[0] };
-    }
-    return null;
-  });
-  if (!spot) ok('an airport code label is on screen to click', false, 'none found');
+  // a label on screen with no aircraft right under it. Aircraft keep landing beside the big airports, so a label that is busy now
+  // is often clear a moment later: look again for up to 20 seconds before calling it missing, and say what was seen if none clears.
+  let spot = null, seen = null;
+  for (let tries = 0; tries < 20 && !spot; tries++) {
+    if (tries) await page.waitForTimeout(1000);
+    const r = await page.evaluate(() => {
+      const s = window.__sky, cam = s.camera, w = innerWidth, h = innerHeight, n = { labels: 0, onScreen: 0, inBox: 0, hit: 0, busy: 0 }; cam.updateMatrixWorld();
+      for (const l of s.labels) {
+        if (!l.a) continue; n.labels++; const v = l.sprite.position.clone().project(cam); if (v.z > 1 || v.z < -1) continue; n.onScreen++;
+        const x = (v.x * 0.5 + 0.5) * w, y = (-v.y * 0.5 + 0.5) * h - 0.9 * 0.021 * h;
+        if (x < 40 || x > w - 420 || y < 40 || y > h - 80) continue; n.inBox++;
+        if (s.airportLabelAt(x, y) !== l.a) continue; n.hit++;
+        const busy = [...s.planes.values()].some((p) => { if (p.lat === null || p.opacity < 0.3) return false; const q = p.pos.clone().project(cam); return Math.hypot((q.x * 0.5 + 0.5) * w - x, (-q.y * 0.5 + 0.5) * h - y) < 24; });
+        if (busy) { n.busy++; continue; }
+        return { spot: { x, y, code: l.a[0] } };
+      }
+      return { n, kind: s.cameraOwner() };
+    });
+    if (r.spot) spot = r.spot; else seen = r;
+  }
+  if (!spot) ok('an airport code label is on screen to click', false, 'none found ' + JSON.stringify(seen));
   else {
     await page.mouse.click(spot.x, spot.y); await page.waitForTimeout(500);
     const after = await page.evaluate(() => { const s = window.__sky; return { center: s.S.center, other: s.S.other, clicked: !!s.clicked }; });
