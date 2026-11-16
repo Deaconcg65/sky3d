@@ -99,6 +99,7 @@ VERSION_FACTS = ('databaseVersion', 'tar1090Version')
 KEEP_SECONDS = 4.0      # people watching the same sky share one answer for this long
 STALE_SECONDS = 30.0    # when the flight networks cannot be asked again yet, an answer up to this old is handed out, marked with its age
 FAILED_SECONDS = 10.0   # a question no flight network could answer is not asked again for this long
+NETWORK_REST = 300.0    # a flight network that just refused or timed out is tried after the others for this long
 NET_RATE, NET_BURST = float(os.environ.get('SKY3D_NET_RATE', '0.75')), 6          # questions a second to the flight networks about an area, for all viewers together
 LOOK_RATE, LOOK_BURST = float(os.environ.get('SKY3D_LOOK_RATE', '0.25')), 4       # the same for single flights, kept apart so one cannot starve the other
 VIEWER_RATE, VIEWER_BURST = float(os.environ.get('SKY3D_VIEWER_RATE', '5')), 150  # requests a second from one viewer; the page itself needs about one and a half
@@ -140,6 +141,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 lock = threading.Lock()
 kept, failed, best = {}, {}, [0]         # flight network answers by question, questions nobody could answer, and which network answered last
+network_down = {}                        # when each flight network last refused or timed out, by its place in NETWORKS
 net_bucket, look_bucket = Bucket(NET_RATE, NET_BURST), Bucket(LOOK_RATE, LOOK_BURST)
 place_bucket, place_hour = Bucket(PLACE_RATE, PLACE_BURST), Bucket(PLACE_HOURLY / 3600.0, 20)
 route_bucket = Bucket(ROUTE_RATE, ROUTE_BURST)
@@ -755,18 +757,24 @@ class Relay(BaseHTTPRequestHandler):
                 may_ask = not recently_failed and asking.take() and bucket.take()
             tried = []
             if may_ask:
-                for i in range(len(NETWORKS)):
+                with lock:   # the networks that failed lately are tried last, so one that times out does not hold every question up
+                    order = sorted(((best[0] + i) % len(NETWORKS) for i in range(len(NETWORKS))),
+                                   key=lambda n: time.monotonic() - network_down.get(n, -1e9) < NETWORK_REST)
+                for i, index in enumerate(order):
                     if i:   # every further network tried counts against the allowance too
                         with lock:
                             if not bucket.take():
                                 break
-                    index = (best[0] + i) % len(NETWORKS)
                     network = NETWORKS[index]
                     worked, status, text, _ = ask(network[which].format(*values))
+                    if not worked:
+                        with lock:
+                            network_down[index] = time.monotonic()
                     if worked:
                         with lock:
                             now = time.monotonic()
                             best[0] = index
+                            network_down.pop(index, None)
                             kept[key] = (now, text, network[0])
                             failed.pop(key, None)
                             for old in [k for k, v in kept.items() if now - v[0] > 45]:

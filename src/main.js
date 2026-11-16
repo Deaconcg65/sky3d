@@ -302,7 +302,7 @@ function updateCorner(date) {
     let ant = 0, nw = 0;
     for (const p of planes.values()) if (p.fresh(t) && !p.remote && (!away || gcDist(mid.lat, mid.lon, p.lat, p.lon) < reach)) { if (p.tAnt && t - p.tAnt < 20) ant++; else nw++; }
     const pl = (n) => n + (n === 1 ? ' aircraft' : ' aircraft');
-    set('k-src', S.src === 'antenna' ? (dataBase ? (away ? ANT[0].toUpperCase() + ANT.slice(1) + ' is far from here' : pl(ant) + ' heard by ' + ANT) : '') : !dataBase || S.src === 'network' ? (net.ok ? pl(nw) + ' from the flight network' : '') : away ? (net.ok ? pl(nw) + ' from the flight network, ' + ANT + ' is far from here' : ANT[0].toUpperCase() + ANT.slice(1) + ' is far from here') : net.ok ? ant + ' by ' + ANT + ', ' + nw + ' more from the flight network' : pl(ant) + ' heard by ' + ANT);
+    set('k-src', S.src === 'antenna' ? (dataBase ? (away ? ANT[0].toUpperCase() + ANT.slice(1) + ' is far from here' : pl(ant) + ' heard by ' + ANT) : '') : !dataBase || S.src === 'network' ? (netAnswering() ? pl(nw) + ' from the flight network' : '') : away ? (netAnswering() ? pl(nw) + ' from the flight network, ' + ANT + ' is far from here' : ANT[0].toUpperCase() + ANT.slice(1) + ' is far from here') : netAnswering() ? ant + ' by ' + ANT + ', ' + nw + ' more from the flight network' : pl(ant) + ' heard by ' + ANT);
   }
 }
 
@@ -470,7 +470,10 @@ function netSources() {
   ];
   const rb = Q.has('netApi') && !Q.has('relay') ? '' : relayBase(); return rb ? [{ name: 'the relay', every: 5, url: point(rb + '/v2/') }].concat(direct) : direct;
 }
-const net = { i: 0, ok: null, last: -1e9, lastGood: -1e9, fails: 0, busy: false, name: '' };
+const net = { i: 0, ok: null, last: -1e9, lastGood: -1e9, fails: 0, busy: false, name: '', left: 0 };
+const NET_WAIT_MS = 15000;   // a question to the flight network not answered by then is given up
+// the network counts as answering only while an answer came in the last 40 seconds, whatever is still on its way
+const netAnswering = () => net.ok === true && nowS() - net.lastGood < 40;
 // When several people watch the same sky the relay hands out one shared answer and says how many seconds old it is.
 // Adding that to each aircraft's own age puts it where it is now, not where it was.
 function aged(list, d) { const age = +d.relay_age || 0; if (age > 0) for (const a of list) a.seen_pos = (a.seen_pos || 0) + age; return list; }
@@ -479,14 +482,21 @@ function netCenter() { const far = followOwns() && gcDist(C.lat, C.lon, pose.lat
 function netRadiusNm() { const mi = S.radius > 0 ? Math.max(S.radius * 1.5, 40) : 140; return Math.round(clamp(mi * 0.869, 35, 130)); }
 async function netTick(force) {
   if (!__NET__ || S.src === 'antenna' || net.busy || (!MANUAL && document.hidden)) return;
-  const list0 = netSources(), t = nowS(), src = list0[net.i % list0.length]; if (!force && t - net.last < src.every) return;
+  const list0 = netSources(), t = nowS();
+  // The relay at home is the way that works best: a network asked straight from the browser is a stand-in for a short while only,
+  // so go back to the relay a minute after leaving it
+  if (net.i % list0.length !== 0 && list0[0].name === 'the relay' && t - net.left > 60) { net.i = 0; net.fails = 0; }
+  const src = list0[net.i % list0.length]; if (!force && t - net.last < src.every) return;
   net.busy = true; net.last = t;
   // ask around the centre of the sky, or around a followed flight once it has left that area
   const { lat: la, lon: lo } = netCenter();
   try {
     // The question is rounded to a tenth of a degree, about seven miles, and reaches a little wider to make up for it. So the exact
     // spot on screen, which may be somebody's house, never leaves this browser, and people watching the same area share one answer.
-    const d = await getJSON(src.url((Math.round(la * 10) / 10).toFixed(1), (Math.round(lo * 10) / 10).toFixed(1), netRadiusNm() + 5) + (MANUAL && fakeT ? '?t=' + fakeT : ''));
+    // An answer that never comes would hold every later question back for good, while the corner still showed the network as
+    // working (a computer waking from sleep, or a connection the tunnel dropped, can leave a question hanging), so give up after 15 seconds.
+    const stop = typeof AbortController === 'function' ? new AbortController() : null, timer = stop && setTimeout(() => stop.abort(), NET_WAIT_MS);
+    let d; try { d = await getJSON(src.url((Math.round(la * 10) / 10).toFixed(1), (Math.round(lo * 10) / 10).toFixed(1), netRadiusNm() + 5) + (MANUAL && fakeT ? '?t=' + fakeT : ''), stop ? { signal: stop.signal } : null); } finally { if (timer) clearTimeout(timer); }
     const list = (d.ac || d.aircraft || []).filter((a) => a && a.lat != null && a.lon != null && a.alt_baro !== 'ground');
     aged(list, d);
     for (const a of list) a._d = gcDist(la, lo, a.lat, a.lon);
@@ -495,7 +505,7 @@ async function netTick(force) {
     net.ok = true; net.fails = 0; net.lastGood = nowS(); net.name = src.name;
   } catch (e) {
     net.fails++; if (nowS() - net.lastGood > 40) net.ok = false;
-    if (net.fails >= 2 && !Q.has('netApi')) { net.i = (net.i + 1) % list0.length; net.fails = 0; }   // try the next one
+    if (net.fails >= 2 && !Q.has('netApi')) { if (net.i % list0.length === 0) net.left = nowS(); net.i = (net.i + 1) % list0.length; net.fails = 0; }   // try the next one
   }
   net.busy = false;
 }
@@ -1104,9 +1114,9 @@ function updateCaption(t) {
   // quiet status line
   let msg = '';
   const netOn = __NET__ && S.src !== 'antenna';
-  if (__NET__ && !dataBase && netOn) msg = net.ok === false ? (relayBase() || Q.has('netApi') ? 'The flight network is not answering. Trying again.' : 'This copy cannot reach the flight network by itself. The network edition needs its relay, which runs on a receiver at home.') : '';
+  if (__NET__ && !dataBase && netOn) msg = net.ok === false || (net.ok === true && !netAnswering()) ? (relayBase() || Q.has('netApi') ? 'The flight network is not answering. Trying again.' : 'This copy cannot reach the flight network by itself. The network edition needs its relay, which runs on a receiver at home.') : '';
   else if (!dataBase) msg = pollFails >= 2 ? (__NET__ ? 'No receiver found here. To watch without one, open the settings and choose the flight network under "Aircraft from".' : 'No receiver found. Open this page from the address of the Raspberry Pi, not from the downloaded file.') : '';
-  else if (t - lastGood > 15 && !(netOn && net.ok)) msg = 'The receiver has stopped answering. Trying again.';
+  else if (t - lastGood > 15 && !(netOn && netAnswering())) msg = 'The receiver has stopped answering. Trying again.';
   else if (follow.want && follow.state === 'looking' && t - follow.since > 4) msg = follow.netOk ? `Looking for ${follow.want}. It is not in the air within reach yet.` : `Looking for ${follow.want} with ${ANT} only. The internet lookup did not answer.`;
   else if (shot.kind === 'wide' && t - shot.t0 > shot.dur + shot.hold + 3 && !paused && !candidates().length) msg = planes.size ? `No aircraft within ${S.radius} miles of ${C.short} right now.` : 'No aircraft heard right now.';
   else if (paused && shot.kind === 'visit') msg = 'Holding on this aircraft. Press the space bar to move on.';
@@ -1592,7 +1602,7 @@ if (S.follow) setFollow(S.follow);
 if (!MANUAL) { poll(); setInterval(followTick, 1000); setInterval(watchTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { get home() { return home; }, set home(v) { home = v; }, save, modelFor, routeHtml, partnerOf, altWords, updateCaption, prepareCaption, get capPlane() { return capPlane; }, cameraOwner, leaveControls, airportLabelAt, centerOnAirport, get labels() { return labels; }, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { net, get home() { return home; }, set home(v) { home = v; }, save, modelFor, routeHtml, partnerOf, altWords, updateCaption, prepareCaption, get capPlane() { return capPlane; }, cameraOwner, leaveControls, airportLabelAt, centerOnAirport, get labels() { return labels; }, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
   net, NET: __NET__ };

@@ -450,6 +450,13 @@ const { chromium } = require('playwright');
   const farAway = await rel.evaluate(() => document.getElementById('k-src').textContent);
   await rel.evaluate((had) => { const s = window.__sky; if (!had) s.home = null; s.S.center = 'MID'; s.S.other = ''; s.applyCenter(false); }, hadHome);
   ok('the corner counts the antenna aircraft at home, and says the antenna is far away while the sky shown is somewhere else', / by /.test(atHome) && /far from here/.test(farAway) && !/ by /.test(farAway), JSON.stringify({ atHome, farAway }));
+  // a question to the flight network that is never answered is given up after 15 seconds, so the page asks again, and the corner
+  // stops counting the network as answering; once the network answers again its aircraft come back
+  await rel.evaluate(() => fetch('/ctl/hangnet?on=1')); await rel.waitForTimeout(18000);
+  const netHang = await rel.evaluate(() => ({ fails: window.__sky.net.fails, busy: window.__sky.net.busy, i: window.__sky.net.i }));
+  await rel.evaluate(() => fetch('/ctl/hangnet?on=0')); await rel.waitForTimeout(8000);
+  const netBack = await rel.evaluate(() => ({ answered: performance.now() / 1000 - window.__sky.net.lastGood < 8 || window.__sky.net.fails === 0, text: document.getElementById('k-src').textContent }));
+  ok('a question to the flight network that never gets an answer is given up, and the network aircraft come back once it answers again', (netHang.fails >= 1 || netHang.i > 0) && netBack.answered && /[1-9]\d* more from the flight network/.test(netBack.text), JSON.stringify({ netHang, netBack }));
   await rel.close(); await page.bringToFront();
   // ---------- version 3.8: satellite photos on the ground ----------
   // off by default: no photo is asked for and no credit line shows
