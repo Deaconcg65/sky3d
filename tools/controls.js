@@ -443,6 +443,13 @@ const { chromium } = require('playwright');
   ok('a regional airline that flies for several partners is named for the one whose hub is on its route, and otherwise flies for a partner', regional.rpaBos === 'DAL' && regional.rpaNone === 'some' && regional.rpaLga === 'some' && regional.skwDen === 'UAL' && regional.skwSea === 'some' && regional.edv === 'DAL' && regional.qxe === 'ASA' && regional.dal === 'own' && regional.tail === 'own', JSON.stringify(regional));
   const low = await page.evaluate(() => { const w = window.__sky.altWords; return { neg: w(false, -150, 25), low: w(false, 75, 25), up: w(false, 2450, 25), ground: w(true, 0, 25) }; });
   ok('an aircraft reading below zero or within 100 feet of it is near the ground, not at minus so many feet', low.neg === 'near the ground' && low.low === 'near the ground' && low.up === '2,450 feet' && low.ground === 'on the ground', JSON.stringify(low));
+  // the count in the corner: the antenna's own aircraft are counted at home, and not while the sky shown is far away
+  const atHome = await rel.evaluate(() => document.getElementById('k-src').textContent);
+  const hadHome = await rel.evaluate(() => { const s = window.__sky, had = s.home; if (!had) s.home = { lat: 41.16, lon: -73.13 }; s.S.center = 'OTHER'; s.S.other = 'KLAX'; s.applyCenter(false); return !!had; });   // a receiver in Connecticut, where the stand-in antenna is
+  await rel.waitForTimeout(3000);
+  const farAway = await rel.evaluate(() => document.getElementById('k-src').textContent);
+  await rel.evaluate((had) => { const s = window.__sky; if (!had) s.home = null; s.S.center = 'MID'; s.S.other = ''; s.applyCenter(false); }, hadHome);
+  ok('the corner counts the antenna aircraft at home, and says the antenna is far away while the sky shown is somewhere else', / by /.test(atHome) && /far from here/.test(farAway) && !/ by /.test(farAway), JSON.stringify({ atHome, farAway }));
   await rel.close(); await page.bringToFront();
   // ---------- version 3.8: satellite photos on the ground ----------
   // off by default: no photo is asked for and no credit line shows

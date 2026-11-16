@@ -15,6 +15,8 @@ Branch v3.10-regionals, built on v3.9-camera (pull request 6), so it merges afte
 - Altitude in words: at or below 100 feet, negatives included (N98EG read -150 feet), the caption, the search list and the watch list say "near the ground". The aircraft was already drawn no lower than the ground.
 - No empty caption lines: a callsign that is a tail number, not an airline's, reads "Private aircraft" on the airline line, and an airline flight with no route found reads "Route not known" instead of a blank line.
 - Browser checks: partnerOf on the test flights, and the altitude words.
+- The corner count (November 16): while the sky shown is far from the receiver, only the aircraft around it are counted, and the corner says the antenna is far from here, instead of counting the antenna's aircraft back home as if they were in view. Chris saw "4 by this site's antenna, 7 more from the flight network" while looking at Los Angeles. At home the count is unchanged. Browser check added.
+- Open (November 16): the live page over Connecticut showed "6 by this site's antenna, 0 more from the flight network" while the networks report about 100 aircraft there, yet Los Angeles got 7. Waiting on what the relay answers through the tunnel and on its check page. One suspect: everyone in the house reaches the relay through the tunnel from one address, and so shares one allowance of questions; a busy allowance gives stale or no answers.
 
 ## Version 3.9 (November 15, 2026): airport codes, one camera owner, realistic shapes, business jets, routes through the relay
 

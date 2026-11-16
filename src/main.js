@@ -296,9 +296,13 @@ function updateCorner(date) {
   }
   set('k-wx', w);
   if (__NET__) {
-    const t = nowS(); let ant = 0, nw = 0; for (const p of planes.values()) if (p.fresh(t) && !p.remote) { if (p.tAnt && t - p.tAnt < 20) ant++; else nw++; }
+    // While the sky shown is far from the receiver, count only the aircraft around it, so the antenna's own aircraft back home
+    // are not counted as if they were here, and say that the antenna is far away
+    const t = nowS(), reach = netRadiusNm() * 1.852 * 1.25, mid = netCenter(), away = !!(dataBase && home && gcDist(mid.lat, mid.lon, home.lat, home.lon) > reach);
+    let ant = 0, nw = 0;
+    for (const p of planes.values()) if (p.fresh(t) && !p.remote && (!away || gcDist(mid.lat, mid.lon, p.lat, p.lon) < reach)) { if (p.tAnt && t - p.tAnt < 20) ant++; else nw++; }
     const pl = (n) => n + (n === 1 ? ' aircraft' : ' aircraft');
-    set('k-src', S.src === 'antenna' ? (dataBase ? pl(ant) + ' heard by ' + ANT : '') : !dataBase || S.src === 'network' ? (net.ok ? pl(nw) + ' from the flight network' : '') : net.ok ? ant + ' by ' + ANT + ', ' + nw + ' more from the flight network' : pl(ant) + ' heard by ' + ANT);
+    set('k-src', S.src === 'antenna' ? (dataBase ? (away ? ANT[0].toUpperCase() + ANT.slice(1) + ' is far from here' : pl(ant) + ' heard by ' + ANT) : '') : !dataBase || S.src === 'network' ? (net.ok ? pl(nw) + ' from the flight network' : '') : away ? (net.ok ? pl(nw) + ' from the flight network, ' + ANT + ' is far from here' : ANT[0].toUpperCase() + ANT.slice(1) + ' is far from here') : net.ok ? ant + ' by ' + ANT + ', ' + nw + ' more from the flight network' : pl(ant) + ' heard by ' + ANT);
   }
 }
 
@@ -470,13 +474,15 @@ const net = { i: 0, ok: null, last: -1e9, lastGood: -1e9, fails: 0, busy: false,
 // When several people watch the same sky the relay hands out one shared answer and says how many seconds old it is.
 // Adding that to each aircraft's own age puts it where it is now, not where it was.
 function aged(list, d) { const age = +d.relay_age || 0; if (age > 0) for (const a of list) a.seen_pos = (a.seen_pos || 0) + age; return list; }
+// the middle of the area asked about: the centre of the sky, or a followed flight once it has left that area
+function netCenter() { const far = followOwns() && gcDist(C.lat, C.lon, pose.lat, pose.lon) > 60; return far ? { lat: pose.lat, lon: pose.lon } : { lat: C.lat, lon: C.lon }; }
 function netRadiusNm() { const mi = S.radius > 0 ? Math.max(S.radius * 1.5, 40) : 140; return Math.round(clamp(mi * 0.869, 35, 130)); }
 async function netTick(force) {
   if (!__NET__ || S.src === 'antenna' || net.busy || (!MANUAL && document.hidden)) return;
   const list0 = netSources(), t = nowS(), src = list0[net.i % list0.length]; if (!force && t - net.last < src.every) return;
   net.busy = true; net.last = t;
   // ask around the centre of the sky, or around a followed flight once it has left that area
-  const far = followOwns() && gcDist(C.lat, C.lon, pose.lat, pose.lon) > 60, la = far ? pose.lat : C.lat, lo = far ? pose.lon : C.lon;
+  const { lat: la, lon: lo } = netCenter();
   try {
     // The question is rounded to a tenth of a degree, about seven miles, and reaches a little wider to make up for it. So the exact
     // spot on screen, which may be somebody's house, never leaves this browser, and people watching the same area share one answer.
@@ -1586,7 +1592,7 @@ if (S.follow) setFollow(S.follow);
 if (!MANUAL) { poll(); setInterval(followTick, 1000); setInterval(watchTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { save, modelFor, routeHtml, partnerOf, altWords, updateCaption, prepareCaption, get capPlane() { return capPlane; }, cameraOwner, leaveControls, airportLabelAt, centerOnAirport, get labels() { return labels; }, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { get home() { return home; }, set home(v) { home = v; }, save, modelFor, routeHtml, partnerOf, altWords, updateCaption, prepareCaption, get capPlane() { return capPlane; }, cameraOwner, leaveControls, airportLabelAt, centerOnAirport, get labels() { return labels; }, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
   net, NET: __NET__ };
