@@ -640,20 +640,46 @@ async function getRoute(p) {
 // next stop when it is climbing away. The route table is kept by volunteers and airlines reuse flight numbers, so a low
 // aircraft near none of its airports has another flight's route on file, and nothing is shown.
 function routeLeg(rt, p) {
-  const leg = pickLeg(rt, p);
-  return leg && leg[0] && leg[1] && typeof leg[0] === 'object' && typeof leg[1] === 'object' ? leg : null;   // never an airport that is missing
+  const leg = pickLeg(rt, p), code = (a) => a && (a.icao || a.iata);
+  if (!leg || !leg[0] || !leg[1] || typeof leg[0] !== 'object' || typeof leg[1] !== 'object') return null;   // never an airport that is missing
+  if (code(leg[0]) && code(leg[0]) === code(leg[1])) return null;   // never the same airport at both ends (version 3.11): the route is not known
+  return leg;
+}
+// A flight number that flies out and back (LGA to XNA to LGA, version 3.11) starts and ends at the same airport, so first to last
+// says nothing. High up, the leg is the one whose line the aircraft is on and whose far end it is heading for. When two legs fit
+// equally well it cannot be told, and the route is not shown.
+function legAloft(ap, p) {
+  const fits = [];
+  for (let i = 0; i < ap.length - 1; i++) {
+    const a = ap[i], b = ap[i + 1];
+    if (!a || !b || !isFinite(a.lat) || !isFinite(b.lat) || (a.icao || a.iata) === (b.icao || b.iata)) continue;
+    const len = gcDist(a.lat, a.lon, b.lat, b.lon), off = gcDist(a.lat, a.lon, p.rLat, p.rLon) + gcDist(p.rLat, p.rLon, b.lat, b.lon) - len;
+    const toward = Math.abs(angDiff(p.track, bearing(p.rLat, p.rLon, b.lat, b.lon))) < 60;
+    if (toward && off < Math.max(80, len * 0.25)) fits.push({ i, off });
+  }
+  if (!fits.length) return null;
+  fits.sort((x, y) => x.off - y.off);
+  if (fits.length > 1 && fits[1].off - fits[0].off < 40) return null;
+  return [ap[fits[0].i], ap[fits[0].i + 1]];
 }
 function pickLeg(rt, p) {
   const ap = rt && rt._airports; if (!ap || ap.length < 2) return null;
   const first = ap[0], last = ap[ap.length - 1];
-  if (p.ground || p.altFt >= 6000) return [first, last];
+  const loop = ap.length > 2 && first && last && (first.icao || first.iata) === (last.icao || last.iata);
+  if (p.ground || p.altFt >= 6000) return loop ? legAloft(ap, p) : [first, last];
   let at = -1, best = 120;
   ap.forEach((a, i) => { if (!a || !isFinite(a.lat) || !isFinite(a.lon)) return; const d = gcDist(a.lat, a.lon, p.rLat, p.rLon); if (d <= best) { best = d; at = i; } });
   if (at === -1) return null;
   if (ap.length === 2) return [first, last];
+  const here = ap[at].icao || ap[at].iata, same = ap.map((a, i) => (a && (a.icao || a.iata) === here ? i : -1)).filter((i) => i >= 0);
+  if (same.length > 1) {   // the airport is on the route more than once (out and back): climbing away it is the leg out, coming down the leg in
+    if (p.vrate > 300 && same[0] < ap.length - 1) return [ap[same[0]], ap[same[0] + 1]];
+    if (p.vrate < -200 && same[same.length - 1] > 0) return [ap[same[same.length - 1] - 1], ap[same[same.length - 1]]];
+    return legAloft(ap, p);
+  }
   if (at > 0 && (p.vrate < -200 || at === ap.length - 1)) return [ap[at - 1], ap[at]];
   if (at < ap.length - 1 && (p.vrate > 300 || at === 0)) return [ap[at], ap[at + 1]];
-  return [first, last];
+  return loop ? legAloft(ap, p) : [first, last];
 }
 const follow = { want: '', reg: '', hex: null, lastRemote: 0, state: 'off', since: 0, netOk: true, tour: false };   // tour: the viewer pressed A, so the followed flight waits
 // Follow has the camera only while a flight is found and the viewer has not paused it with A

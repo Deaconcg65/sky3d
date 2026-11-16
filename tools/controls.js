@@ -248,6 +248,16 @@ const { chromium } = require('playwright');
     return { down: names(L(rt, at(1800, -900, 40.62, -73.85))), up: names(L(rt, at(2500, 1500, 40.66, -73.70))), high: names(L(rt, at(35000, 0, 40, -90))), lost: names(L(rt, at(2000, -800, 39.0, -77.0))), broken: names(L({ _airports: [null, ap('KJFK', 40.64, -73.78)] }, at(35000, 0, 40, -90))) };
   });
   ok('a flight with a stop shows the leg it is on, and a route nowhere near is not trusted', legs.down === 'KLAX-KJFK' && legs.up === 'KJFK-KBOS' && legs.high === 'KLAX-KBOS' && legs.lost === 'none' && legs.broken === 'none', JSON.stringify(legs));
+  // version 3.11: one flight number out and back (RPA 4555 flies LGA to XNA and back): never the same airport at both ends
+  const loops = await page.evaluate(() => {
+    const L = window.__sky.routeLeg, ap = (c, lat, lon) => ({ icao: c, iata: c.slice(1), name: c, lat, lon });
+    const rt = { _airports: [ap('KLGA', 40.78, -73.87), ap('KXNA', 36.28, -94.31), ap('KLGA', 40.78, -73.87)] };
+    const at = (altFt, vrate, lat, lon, track) => ({ ground: false, altFt, vrate, rLat: lat, rLon: lon, track });
+    const names = (l) => l ? l.map((a) => a.icao).join('-') : 'none';
+    return { out: names(L(rt, at(12075, 1500, 40.4, -75.5, 250))), back: names(L(rt, at(30000, 0, 38.5, -85, 70))), sideways: names(L(rt, at(30000, 0, 38.5, -85, 160))), climbing: names(L(rt, at(2500, 1500, 40.75, -73.95, 300))), landing: names(L(rt, at(2000, -900, 40.72, -73.80, 40))),
+      same: names(L({ _airports: [ap('KLGA', 40.78, -73.87), ap('KLGA', 40.78, -73.87)] }, at(12075, 1500, 40.9, -73.5, 60))) };
+  });
+  ok('a flight number that flies out and back shows the leg the aircraft is on, and never the same airport at both ends', loops.out === 'KLGA-KXNA' && loops.back === 'KXNA-KLGA' && loops.sideways === 'none' && loops.climbing === 'KLGA-KXNA' && loops.landing === 'KXNA-KLGA' && loops.same === 'none', JSON.stringify(loops));
   // the first route service does not know a flight: the second one is asked, so its origin can still be shown
   const rtab = await browser.newPage({ viewport: { width: 640, height: 360 } }); rtab.on('pageerror', (e) => errs.push('PAGEERROR (two route services): ' + e.message));
   await rtab.goto(PAGE.replace('routeApi=/mock/routeset', 'routeApi=/mock/routeset-none,/mock/routeset')); await rtab.waitForTimeout(5000);
@@ -478,8 +488,36 @@ const { chromium } = require('playwright');
   ok('with a relay beside the page, routes are asked of the relay and not of the route services directly', viaRelay.asked > 0 && viaRelay.got.some(Boolean) && viaRelay.n.relay >= viaRelay.asked && viaRelay.n.direct === 0, JSON.stringify(viaRelay));
   // ---------- version 3.10: regional airlines under their partner's name, and altitudes near the ground ----------
   const regional = await page.evaluate(() => { const f = window.__sky.partnerOf, ap = (a, b) => [{ iata: a }, { iata: b }], k = (x) => (x ? x.key || (x.some ? 'some' : '?') : 'own');
-    return { rpaBos: k(f('RPA5604', ap('MEM', 'BOS'))), rpaNone: k(f('RPA5604', null)), rpaLga: k(f('RPA5400', ap('LGA', 'ROC'))), rpa4466: k(f('RPA4466', ap('LGA', 'BOS'))), rpa4466n: k(f('RPA4466', null)), skwDen: k(f('SKW3000', ap('DEN', 'BIL'))), skwSea: k(f('SKW3000', ap('SEA', 'GEG'))), edv: k(f('EDV5000', null)), qxe: k(f('QXE2100', null)), dal: k(f('DAL1311', ap('PBI', 'ATL'))), tail: k(f('N345MG', null)) }; });
-  ok('a regional airline that flies for several partners is named from its flight number where that is known (RPA 4466 LGA to BOS is American), then for the one whose hub is on its route, and otherwise flies for a partner', regional.rpaBos === 'DAL' && regional.rpaNone === 'some' && regional.rpaLga === 'some' && regional.rpa4466 === 'AAL' && regional.rpa4466n === 'AAL' && regional.skwDen === 'UAL' && regional.skwSea === 'some' && regional.edv === 'DAL' && regional.qxe === 'ASA' && regional.dal === 'own' && regional.tail === 'own', JSON.stringify(regional));
+    return { rpaBos: k(f('RPA5604', ap('MEM', 'BOS'))), rpaNone: k(f('RPA5604', null)), rpaLga: k(f('RPA5400', ap('LGA', 'ROC'))), rpa4466: k(f('RPA4466', ap('LGA', 'BOS'))), rpa4466n: k(f('RPA4466', null)), rpa4555: k(f('RPA4555', null)), skwDen: k(f('SKW3000', ap('DEN', 'BIL'))), skwSea: k(f('SKW3000', ap('SEA', 'GEG'))), edv: k(f('EDV5000', null)), qxe: k(f('QXE2100', null)), dal: k(f('DAL1311', ap('PBI', 'ATL'))), tail: k(f('N345MG', null)) }; });
+  ok('a regional airline that flies for several partners is named from its flight number where that is known (RPA 4466 LGA to BOS and RPA 4555 are American), then for the one whose hub is on its route, and otherwise flies for a partner', regional.rpaBos === 'DAL' && regional.rpaNone === 'some' && regional.rpaLga === 'some' && regional.rpa4466 === 'AAL' && regional.rpa4466n === 'AAL' && regional.rpa4555 === 'AAL' && regional.skwDen === 'UAL' && regional.skwSea === 'some' && regional.edv === 'DAL' && regional.qxe === 'ASA' && regional.dal === 'own' && regional.tail === 'own', JSON.stringify(regional));
+  // ---------- version 3.11: a photo of the aircraft in the caption, from Planespotters.net ----------
+  const ph = await browser.newPage({ viewport: { width: 960, height: 540 } }); ph.on('pageerror', (e) => errs.push('PAGEERROR (photos): ' + e.message));
+  await ph.goto(PAGE + '&photoApi=/mock/photos/'); await ph.waitForTimeout(5000);
+  await ph.evaluate(() => { const s = window.__sky; s.setFollow(''); const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.callsign()); s.lockOn(p); });
+  await ph.waitForFunction(() => document.getElementById('cap').classList.contains('on'), null, { timeout: 15000 }).catch(() => {});
+  const btnShown = await ph.evaluate(() => !document.getElementById('photobtn').hidden && document.body.classList.contains('hasphoto'));
+  await ph.keyboard.press('i');
+  await ph.waitForFunction(() => !document.getElementById('photo-credit').hidden, null, { timeout: 10000 }).catch(() => {});
+  const good = await ph.evaluate(() => { const c = document.getElementById('photo-credit'), a = c.querySelector('a'); return { open: !document.getElementById('photo').hidden, title: document.getElementById('photo-title').textContent, credit: c.textContent, imgs: c.querySelectorAll('img').length, link: a && a.href, target: a && a.target, rel: a && a.rel, src: document.getElementById('photo-img').getAttribute('src') }; });
+  ok('the I key opens a photo of the aircraft in the caption, with the photographer named as plain text and a link to its Planespotters.net page', btnShown && good.open && good.title.length > 0 && /^Photo © Pat Spotter <img/.test(good.credit) && good.imgs === 0 && /^https:\/\/www\.planespotters\.net\/photo\//.test(good.link || '') && good.target === '_blank' && /noopener/.test(good.rel || '') && /^https:\/\/t\.plnspttrs\.net\//.test(good.src || ''), JSON.stringify(Object.assign(good, { btnShown })));
+  await ph.keyboard.press('Escape');
+  const shut = await ph.evaluate(() => document.getElementById('photo').hidden);
+  // the same aircraft under another identity: one with no photo, and one whose answer points somewhere other than Planespotters
+  const tryHex = (hex) => ph.evaluate(async (h) => { const s = window.__sky, p = s.capPlane, was = p.hex; p.hex = h; document.getElementById('photobtn').click();
+    for (let i = 0; i < 40 && /Looking/.test(document.getElementById('photo-note').textContent); i++) await new Promise((r) => setTimeout(r, 250));
+    const out = { note: document.getElementById('photo-note').textContent, credit: document.getElementById('photo-credit').hidden, src: document.getElementById('photo-img').getAttribute('src') };
+    document.getElementById('photo-close').click(); p.hex = was; return out; }, hex);
+  const none = await tryHex('eeeee0'), evil = await tryHex('bad001');
+  ok('Escape closes the photo, an aircraft with no photo says so, and a photo from anywhere but Planespotters is not shown', shut && /no photo/.test(none.note) && none.credit && !none.src && /no photo/.test(evil.note) && evil.credit && !evil.src, JSON.stringify({ shut, none, evil }));
+  await ph.close();
+  // the network edition with a relay asks the relay for photos, not Planespotters directly
+  await sim('/ctl/photoasks?reset=1');
+  await rel.evaluate(() => { const s = window.__sky; s.setFollow(''); const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.callsign()); s.lockOn(p); });
+  await rel.waitForFunction(() => document.getElementById('cap').classList.contains('on'), null, { timeout: 15000 }).catch(() => {});
+  await rel.keyboard.press('i');
+  await rel.waitForFunction(() => !document.getElementById('photo-credit').hidden, null, { timeout: 10000 }).catch(() => {});
+  const relPh = await sim('/ctl/photoasks'), relCredit = await rel.evaluate(() => { const c = document.getElementById('photo-credit'); const t = c.hidden ? '' : c.textContent; document.getElementById('photo-close').click(); return t; });
+  ok('with a relay beside the page, photos are asked of the relay and not of Planespotters directly', relPh.relay > 0 && relPh.hex === 0 && relPh.reg === 0 && /Pat Spotter/.test(relCredit), JSON.stringify(Object.assign(relPh, { relCredit })));
   const low = await page.evaluate(() => { const w = window.__sky.altWords; return { neg: w(false, -150, 25), low: w(false, 75, 25), up: w(false, 2450, 25), ground: w(true, 0, 25) }; });
   ok('an aircraft reading below zero or within 100 feet of it is near the ground, not at minus so many feet', low.neg === 'near the ground' && low.low === 'near the ground' && low.up === '2,450 feet' && low.ground === 'on the ground', JSON.stringify(low));
   // the count in the corner: the antenna's own aircraft are counted at home, and not while the sky shown is far away
