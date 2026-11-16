@@ -508,9 +508,12 @@ const mirror = (p) => [-p[0], p[1], p[2]];
 const both = (G, zone, pts, t) => { slab(G, zone, ...pts, t); slab(G, zone, ...pts.map(mirror).reverse(), t); };
 // body: '747' adds the hump of the upper deck over the front third of the body; 'a380' adds a second deck the whole length,
 // so the body is taller than it is wide from the nose to the tail, the way the A380 looks.
+// '757' (version 3.11) is a longer, slimmer body with a sharper nose and bigger engines, the way the 757 stands apart from a 737 or A320.
 function jet(engines = 2, body = '') {
   const G = newG();
-  fuselage(G, [[-0.5, 0.004, 0.03], [-0.47, 0.016, 0.024], [-0.36, 0.036, 0.011], [-0.22, 0.05, 0], [0.33, 0.05, 0], [0.4, 0.045, -0.001], [0.435, 0.038, -0.004], [0.465, 0.028, -0.008], [0.49, 0.014, -0.012], [0.5, 0.0, -0.014]],
+  if (body === '757') fuselage(G, [[-0.5, 0.004, 0.026], [-0.47, 0.014, 0.02], [-0.36, 0.031, 0.009], [-0.22, 0.042, 0], [0.36, 0.042, 0], [0.42, 0.037, -0.001], [0.455, 0.03, -0.004], [0.48, 0.02, -0.008], [0.495, 0.009, -0.011], [0.5, 0.0, -0.012]],
+    { glass: [0.425, 0.48, 64] });
+  else fuselage(G, [[-0.5, 0.004, 0.03], [-0.47, 0.016, 0.024], [-0.36, 0.036, 0.011], [-0.22, 0.05, 0], [0.33, 0.05, 0], [0.4, 0.045, -0.001], [0.435, 0.038, -0.004], [0.465, 0.028, -0.008], [0.49, 0.014, -0.012], [0.5, 0.0, -0.014]],
     { glass: body === 'a380' ? null : [0.4, 0.465, 64] });
   if (body === '747') fuselage(G, [[-0.02, 0.004, 0.03], [0.04, 0.026, 0.032], [0.12, 0.034, 0.034], [0.34, 0.034, 0.034], [0.4, 0.03, 0.028], [0.44, 0.022, 0.02], [0.47, 0.008, 0.01], [0.48, 0.0, 0.006]], { glass: [0.42, 0.47, 50], stripe: [72, 84] });
   if (body === 'a380') fuselage(G, [[-0.44, 0.004, 0.044], [-0.38, 0.022, 0.04], [-0.26, 0.042, 0.034], [-0.18, 0.046, 0.034], [0.34, 0.046, 0.032], [0.41, 0.04, 0.026], [0.45, 0.032, 0.016], [0.475, 0.022, 0.006], [0.49, 0.01, -0.002], [0.495, 0.0, -0.006]], { glass: [0.44, 0.49, 70], stripe: [72, 86] });
@@ -518,9 +521,10 @@ function jet(engines = 2, body = '') {
   both(G, ZI.tip, [[0.497, 0.017, -0.15], [0.497, 0.017, -0.2], [0.512, 0.07, -0.228], [0.512, 0.07, -0.2]], [0.006, 0, 0]);
   both(G, ZI.wing, [[0.02, 0.03, -0.37], [0.02, 0.03, -0.46], [0.19, 0.04, -0.5], [0.19, 0.04, -0.455]], [0, 0.008, 0]);
   fin(G, [0, 0.045, -0.33], [0, 0.04, -0.475], [0, 0.21, -0.52], [0, 0.21, -0.455]);
+  const big = body === '757' ? 1.2 : 1;
   const eng = (x, z) => {
-    const g = new THREE.CylinderGeometry(0.026, 0.022, 0.1, 12); g.rotateX(Math.PI / 2); g.translate(x, -0.058, z); pushGeo(G, ZI.eng, g);
-    const d = new THREE.CircleGeometry(0.021, 12); d.translate(x, -0.058, z + 0.0506); pushGeo(G, ZI.glass, d);
+    const g = new THREE.CylinderGeometry(0.026 * big, 0.022 * big, 0.1, 12); g.rotateX(Math.PI / 2); g.translate(x, -0.058, z); pushGeo(G, ZI.eng, g);
+    const d = new THREE.CircleGeometry(0.021 * big, 12); d.translate(x, -0.058, z + 0.0506); pushGeo(G, ZI.glass, d);
   };
   eng(0.17, 0.05); eng(-0.17, 0.05);
   if (engines === 4) { eng(0.31, -0.03); eng(-0.31, -0.03); }
@@ -544,6 +548,26 @@ function bizjet() {
   both(G, ZI.wing, [[0.03, 0.03, -0.21], [0.03, 0.03, -0.29], [0.064, 0.032, -0.29], [0.064, 0.032, -0.21]], [0, 0.008, 0]);   // the pylons holding the engines to the body
   return finish(G);
 }
+// A twin turboprop (version 3.11): a straight wing with a propeller engine on each side and a tailplane on top of the fin.
+// high: the wing on top of the body, as on the ATR, the Dash 8 and the Dornier 328; otherwise under it, as on the King Air.
+function turboprop(high) {
+  const G = newG(), wy = high ? 0.048 : -0.034;
+  fuselage(G, [[-0.5, 0.004, 0.03], [-0.44, 0.014, 0.024], [-0.3, 0.04, 0.01], [-0.15, 0.052, 0], [0.32, 0.052, 0], [0.4, 0.046, -0.003], [0.45, 0.034, -0.008], [0.485, 0.016, -0.012], [0.5, 0.0, -0.014]],
+    { glass: [0.38, 0.47, 64] });
+  both(G, ZI.wing, [[0.04, wy, 0.12], [0.04, wy, -0.02], [0.6, wy + 0.008, 0.02], [0.6, wy + 0.008, 0.09]], [0, 0.012, 0]);
+  both(G, ZI.tip, [[0.6, wy + 0.008, 0.09], [0.6, wy + 0.008, 0.02], [0.62, wy + 0.01, 0.03], [0.62, wy + 0.01, 0.08]], [0, 0.012, 0]);
+  fin(G, [0, 0.045, -0.3], [0, 0.04, -0.47], [0, 0.2, -0.52], [0, 0.2, -0.44]);
+  both(G, ZI.wing, [[0.006, 0.196, -0.43], [0.006, 0.196, -0.52], [0.18, 0.204, -0.53], [0.18, 0.204, -0.48]], [0, 0.008, 0]);
+  const eng = (x) => {
+    const ny = wy - (high ? 0.016 : -0.014);
+    const g = new THREE.CylinderGeometry(0.022, 0.017, 0.22, 12); g.rotateX(Math.PI / 2); g.translate(x, ny, 0.11); pushGeo(G, ZI.eng, g);
+    const spin = new THREE.ConeGeometry(0.016, 0.035, 10); spin.rotateX(Math.PI / 2); spin.translate(x, ny, 0.237); pushGeo(G, ZI.eng, spin);
+    slab(G, ZI.glass, [x - 0.006, ny - 0.1, 0.226], [x + 0.006, ny - 0.1, 0.226], [x + 0.006, ny + 0.1, 0.226], [x - 0.006, ny + 0.1, 0.226], [0, 0, 0.005]);   // the propeller, standing still as it looks in a photo
+    slab(G, ZI.glass, [x - 0.1, ny - 0.006, 0.226], [x + 0.1, ny - 0.006, 0.226], [x + 0.1, ny + 0.006, 0.226], [x - 0.1, ny + 0.006, 0.226], [0, 0, 0.005]);
+  };
+  eng(0.17); eng(-0.17);
+  return finish(G);
+}
 function light() {
   const G = newG();
   // a single engine at the nose: a spinner and a two-blade propeller, standing still as it looks in a photo
@@ -562,6 +586,11 @@ function heli() {
   fuselage(G, [[-0.5, 0.008, 0.03], [-0.1, 0.025, 0.01]], { seg: 8, aftZ: 9, stripe: [200, 200] });
   fin(G, [0, 0.03, -0.42], [0, 0.03, -0.5], [0, 0.17, -0.53], [0, 0.17, -0.47]);
   const mast = new THREE.CylinderGeometry(0.012, 0.012, 0.05, 6); mast.translate(0, 0.115, 0.12); pushGeo(G, ZI.glass, mast);
+  // version 3.11: landing skids under the body on short legs, the way most helicopters seen over a city stand
+  for (const x of [0.075, -0.075]) {
+    const skid = new THREE.CylinderGeometry(0.008, 0.008, 0.46, 6); skid.rotateX(Math.PI / 2); skid.translate(x, -0.135, 0.15); pushGeo(G, ZI.eng, skid);
+    for (const z of [0.03, 0.27]) slab(G, ZI.eng, [x * 0.45, -0.07, z - 0.008], [x * 0.45, -0.07, z + 0.008], [x, -0.135, z + 0.008], [x, -0.135, z - 0.008], [0.008, 0, 0]);
+  }
   return finish(G);
 }
 function rotorGeo() {
@@ -588,6 +617,9 @@ export const MODELS = {
   heavy: { make: () => jet(4), len: 1.45, tips: 0.512, tipY: 0.05, tipZ: -0.2, tail: -0.5, tailY: 0.035, finTop: [0.225, -0.49], belly: [-0.062, 0.02] },
   biz: { make: bizjet, len: 0.62, tips: 0.47, tipY: 0.045, tipZ: -0.21, tail: -0.5, tailY: 0.03, finTop: [0.216, -0.5], belly: [-0.045, -0.02] },
   light: { make: light, len: 0.5, tips: 0.66, tipY: 0.078, tipZ: 0.11, tail: -0.5, tailY: 0.02, finTop: [0.215, -0.48], belly: [-0.07, 0.1] },
+  b757: { make: () => jet(2, '757'), len: 1.2, tips: 0.512, tipY: 0.05, tipZ: -0.2, tail: -0.5, tailY: 0.03, finTop: [0.225, -0.49], belly: [-0.054, 0.02] },
+  turbo: { make: () => turboprop(true), len: 0.68, tips: 0.62, tipY: 0.06, tipZ: 0.055, tail: -0.5, tailY: 0.03, finTop: [0.215, -0.5], belly: [-0.062, 0.0] },
+  kingair: { make: () => turboprop(false), len: 0.42, tips: 0.62, tipY: -0.022, tipZ: 0.055, tail: -0.5, tailY: 0.03, finTop: [0.215, -0.5], belly: [-0.062, 0.0] },
   heli: { make: heli, len: 0.5, tips: 0.1, tipY: 0.0, tipZ: 0.1, tail: -0.5, tailY: 0.03, finTop: [0.185, -0.5], belly: [-0.112, 0.14] },
 };
 // Type codes are matched by their start, so a short code must not also be the start of another aircraft's code:
@@ -598,11 +630,15 @@ export function modelFor(category, type) {
   if (/^B74/.test(t)) return 'b747';
   if (/^A38/.test(t)) return 'a380';
   if (/^(A34|IL96|A124|C5M|C17$|B52|K35)/.test(t)) return 'heavy';
+  if (/^B75/.test(t)) return 'b757';
   if (category === 'A5' || /^(B77|B78|A33|A35|B76|MD11|DC10|A30|A310)/.test(t)) return 'heavy2';
   // business jets: Citations, Challengers, Gulfstreams, Global Express, Phenoms, Learjets, Falcons, Hawkers, the PC-24 and the HondaJet.
   // (A three-engine Falcon 7X or 900 is drawn with two; the rear engines are what make the shape.)
   if (/^(C25|C50|C51|C52|C55|C56|C65|C68|C70|C75|CL30|CL35|CL60|GLF|GL5T|GL6T|GL7T|GLEX|GA5C|GA6C|GA7C|GA8C|E50P|E55P|LJ\d|FA\d|F2TH|F900|H25|PC24|HDJT|PRM1|BE40|G150|G280|ASTR|GALX|EA50)/.test(t)) return 'biz';
-  if (category === 'A1' || /^(C1[5-9]\d|C2\d\d|P28|PA\d|SR2|DA4|BE3[3-6]|BE5|M20|C82|C72)/.test(t)) return 'light';
+  // twin turboprops (version 3.11): ATRs, Dash 8s, Saabs, Dorniers and the like with the wing on top; King Airs and their cousins with it below
+  if (/^(AT4|AT7|DH8|SF34|SB20|D328|J328|E120|F50|SW4|C212|CN35|DHC6)/.test(t)) return 'turbo';
+  if (/^(BE20|BE30|B350|BE9L|BE9T|BE99|B190|BE10|P180|C425|C441|MU2|PAY\d|AC\d\d|PA31T)/.test(t)) return 'kingair';
+  if (category === 'A1' || /^(C1[5-9]\d|C2\d\d|P28|PA\d|SR2|DA4|BE3[3-6]|BE5|M20|C82|C72|PC12|TBM\d|P46T|M600|PC6)/.test(t)) return 'light';   // single engine, the PC-12 and TBM turboprops included
   return 'jet';
 }
 // One material per aircraft. The shader looks up each corner's zone in that aircraft's own list of colours.
@@ -652,6 +688,9 @@ export class PlaneMesh {
       if (!GEOS.rotor) GEOS.rotor = rotorGeo();
       this.rotorMat = new THREE.MeshStandardMaterial({ color: 0x2a2f38, roughness: 0.7, transparent: true, fog: true });
       this.rotor = new THREE.Mesh(GEOS.rotor, this.rotorMat); this.rotor.position.set(0, 0.142, 0.12); this.rotor.renderOrder = 10; this.group.add(this.rotor);
+      // the small rotor on the side of the tail (version 3.11), turning across the tail boom
+      if (!GEOS.tailRotor) { const g = rotorGeo(); g.rotateZ(Math.PI / 2); g.scale(1, 0.16, 0.16); GEOS.tailRotor = g; }
+      this.tailRotor = new THREE.Mesh(GEOS.tailRotor, this.rotorMat); this.tailRotor.position.set(0.028, 0.12, -0.49); this.tailRotor.renderOrder = 10; this.group.add(this.tailRotor);
     }
     const sp = (color, x, y, z, s, additive = true) => {
       const mat = new THREE.SpriteMaterial({ map: dotTexture(), color, transparent: true, depthWrite: false, depthTest: true, blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending, fog: false });
@@ -668,7 +707,7 @@ export class PlaneMesh {
     this.phase = Math.random() * 10;
   }
   makeLanding() {
-    const m = this.model, k = this.key, z = k === 'light' ? 0.215 : k === 'heli' ? 0.4 : 0.128, x = k === 'biz' ? 0.06 : k === 'jet' || k === 'heavy' || k === 'b747' || k === 'a380' ? 0.075 : 0, y = k === 'light' ? 0.062 : k === 'heli' ? -0.06 : -0.034;
+    const m = this.model, k = this.key, z = k === 'light' ? 0.215 : k === 'heli' ? 0.4 : 0.128, x = k === 'biz' ? 0.06 : k === 'jet' || k === 'heavy' || k === 'b747' || k === 'a380' || k === 'b757' ? 0.075 : 0, y = k === 'light' ? 0.062 : k === 'heli' ? -0.06 : -0.034;
     const mk = (px) => { const mat = new THREE.SpriteMaterial({ map: dotTexture(), color: 0xfff6e0, transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, fog: false, opacity: 0 });
       const o = new THREE.Sprite(mat); o.position.set(px, y, z); o.renderOrder = 13; this.group.add(o); return o; };
     const lamps = x ? [mk(x), mk(-x)] : [mk(0)];
@@ -681,7 +720,7 @@ export class PlaneMesh {
   update(time, opacity, night, bodyColor, far, landing = 0, ahead = 0) {
     this.mat.opacity = opacity; this.mat.color.copy(bodyColor);
     this.mat.emissive.setScalar(0.3 * night);
-    if (this.rotor) { this.rotorMat.opacity = opacity * 0.85; this.rotor.rotation.y = (time + this.phase) * 9.5; }
+    if (this.rotor) { this.rotorMat.opacity = opacity * 0.85; this.rotor.rotation.y = (time + this.phase) * 9.5; this.tailRotor.rotation.x = (time + this.phase) * 30; }
     const base = (0.12 + 0.88 * night) * opacity, swell = (0.55 + 0.45 * night) * (1 + far * 1.6 * night);
     const t = (time + this.phase) % 1.6, flash = (t < 0.06 || (t > 0.18 && t < 0.24)) ? 1 : 0;
     this.red.material.opacity = base; this.green.material.opacity = base; this.white.material.opacity = base * 0.9;

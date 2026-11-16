@@ -118,7 +118,7 @@ export function paintFor(callsign, hexId, kind) {
   if (!r) {
     const al = key && AIRLINES[key];
     if (al) r = { tail: al[2], eng: al[2] };                                   // an airline we know only by one colour
-    else if (kind === 'light' || kind === 'heli') { let h = 0; for (const c of hexId || '') h = (h * 31 + c.charCodeAt(0)) >>> 0; const c = GA[h % GA.length]; r = { stripe: c, tail: c, tip: c }; }
+    else if (kind === 'light' || kind === 'heli' || kind === 'kingair') { let h = 0; for (const c of hexId || '') h = (h * 31 + c.charCodeAt(0)) >>> 0; const c = GA[h % GA.length]; r = { stripe: c, tail: c, tip: c }; }
     else r = { tail: 0x8fa3b8, eng: 0xdfe2e6 };                                // unknown: plain white with a grey tail
   }
   const top = r.top != null ? r.top : W, tail = Array.isArray(r.tail) ? r.tail : [r.tail != null ? r.tail : top, r.tail != null ? r.tail : top, r.tail != null ? r.tail : top];
