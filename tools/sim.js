@@ -121,15 +121,16 @@ function dbFile(name) {
   if (!fs.existsSync(fp)) { try { execFileSync('curl', ['-sS', '-f', '-m', '30', '-o', fp, 'https://raw.githubusercontent.com/wiedehopf/tar1090-db/master/db/' + path.basename(name)]); } catch (e) { return null; } }
   return fs.existsSync(fp) ? fs.readFileSync(fp) : null;
 }
-let stall = false, stallNet = false, netAsked = 0, watchShown = true, regAsked = 0;
+let stall = false, stallNet = false, hangNet = false, hung = [], netAsked = 0, watchShown = true, regAsked = 0;
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x'), T = u.searchParams.has('t') ? +u.searchParams.get('t') : Date.now() / 1000;
   const json = (o, extra) => { res.writeHead(200, Object.assign({ 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' }, extra || {})); res.end(typeof o === 'string' || Buffer.isBuffer(o) ? o : JSON.stringify(o)); };
   if (u.pathname === '/sky/' || u.pathname === '/sky/index.html') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(fs.readFileSync(path.join(root, 'build/sky3d.html'))); }
   if (u.pathname === '/net/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(fs.readFileSync(path.join(root, 'build/sky3d-network.html'))); }
   // stand-in for the flight network: every aircraft in the area, including the low ones the pretend antenna cannot hear
-  if (u.pathname.startsWith('/mock/v2/point/')) { netAsked++; if (stallNet) { res.writeHead(503); return res.end(); } const all = snapshot(T, { all: true }).map(strip).map((a) => Object.assign({ t: 'B738', desc: 'BOEING 737-800' }, a)); return json({ ac: all, msg: 'No error', now: Math.round(T * 1000), total: all.length }, { 'Access-Control-Allow-Origin': '*' }); }
+  if (u.pathname.startsWith('/mock/v2/point/')) { netAsked++; if (hangNet) { hung.push(res); return; } if (stallNet) { res.writeHead(503); return res.end(); } const all = snapshot(T, { all: true }).map(strip).map((a) => Object.assign({ t: 'B738', desc: 'BOEING 737-800' }, a)); return json({ ac: all, msg: 'No error', now: Math.round(T * 1000), total: all.length }, { 'Access-Control-Allow-Origin': '*' }); }
   if (u.pathname === '/ctl/netasked') return json({ asked: netAsked });   // how many times the stand-in flight network has been asked about an area
+  if (u.pathname === '/ctl/hangnet') { hangNet = u.searchParams.get('on') === '1'; if (!hangNet) { for (const r of hung.splice(0)) { try { r.writeHead(503); r.end(); } catch (e) { /* the page already gave up */ } } } return json({ hangNet, waiting: hung.length }); }   // questions that are never answered, as when a tunnel drops a connection
   if (u.pathname === '/ctl/stallnet') { stallNet = u.searchParams.get('on') === '1'; return json({ stallNet }); }
   if (u.pathname === '/ctl/stall') { stall = u.searchParams.get('on') === '1'; return json({ stall }); }
   if (u.pathname === '/tar1090/data/aircraft.json') { if (stall) { res.writeHead(503); return res.end(); } return json({ now: +T.toFixed(1), messages: 1234567, aircraft: snapshot(T).map(strip).map((x) => Object.assign(x, { rssi: -12.3, r_dst: +(gc(HOME, [x.lat, x.lon]) / NM).toFixed(1), r_dir: +brg(HOME, [x.lat, x.lon]).toFixed(1), rr_lat: +HOME[0].toFixed(1), rr_lon: +HOME[1].toFixed(1), mlat: [], nav_modes: ['autopilot'] })) }); }

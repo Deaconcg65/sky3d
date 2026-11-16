@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { R_EARTH, FT, KT, MI, D2R, clamp, lerp, smooth, angDiff, lerpAng, gcDist, bearing, sunPosition, sunTimes, fmtInt, prettyType } from './util.js';
 import { VEX, proj, setOrigin, project, localFrame, Segments, Ground, Sky, WeatherLayer, PlaneMesh, modelFor, makeLabel, SatGround } from './scene.js';
-import { AIRLINES, IATA2ICAO, PAINT_AS, paintFor } from './airlines.js';
+import { AIRLINES, IATA2ICAO, paintFor, partnerOf } from './airlines.js';
 
 const Q = new URLSearchParams(location.search);
 // __NET__ is set when the page is built: true in the network edition, false in the home edition.
@@ -296,9 +296,14 @@ function updateCorner(date) {
   }
   set('k-wx', w);
   if (__NET__) {
-    const t = nowS(); let ant = 0, nw = 0; for (const p of planes.values()) if (p.fresh(t) && !p.remote) { if (p.tAnt && t - p.tAnt < 20) ant++; else nw++; }
+    // While the sky shown is far from the receiver, count only the aircraft around it, so the antenna's own aircraft back home
+    // are not counted as if they were here, and say that the antenna is far away
+    const t = nowS(), reach = netRadiusNm() * 1.852 * 1.25, mid = netCenter(), away = !!(dataBase && home && gcDist(mid.lat, mid.lon, home.lat, home.lon) > reach);
+    let ant = 0, nw = 0;
+    for (const p of planes.values()) if (p.fresh(t) && !p.remote && (!away || gcDist(mid.lat, mid.lon, p.lat, p.lon) < reach)) { if (p.tAnt && t - p.tAnt < 20) ant++; else nw++; }
     const pl = (n) => n + (n === 1 ? ' aircraft' : ' aircraft');
-    set('k-src', S.src === 'antenna' ? (dataBase ? pl(ant) + ' heard by ' + ANT : '') : !dataBase || S.src === 'network' ? (net.ok ? pl(nw) + ' from the flight network' : '') : net.ok ? ant + ' by ' + ANT + ', ' + nw + ' more from the flight network' : pl(ant) + ' heard by ' + ANT);
+    const far = away && ant === 0;   // say the antenna is far away only when it hears nothing around the sky shown
+    set('k-src', S.src === 'antenna' ? (dataBase ? (far ? ANT[0].toUpperCase() + ANT.slice(1) + ' is far from here' : pl(ant) + ' heard by ' + ANT) : '') : !dataBase || S.src === 'network' ? (netAnswering() ? pl(nw) + ' from the flight network' : '') : far ? (netAnswering() ? pl(nw) + ' from the flight network, ' + ANT + ' is far from here' : ANT[0].toUpperCase() + ANT.slice(1) + ' is far from here') : netAnswering() ? ant + ' by ' + ANT + ', ' + nw + ' more from the flight network' : pl(ant) + ' heard by ' + ANT);
   }
 }
 
@@ -466,21 +471,33 @@ function netSources() {
   ];
   const rb = Q.has('netApi') && !Q.has('relay') ? '' : relayBase(); return rb ? [{ name: 'the relay', every: 5, url: point(rb + '/v2/') }].concat(direct) : direct;
 }
-const net = { i: 0, ok: null, last: -1e9, lastGood: -1e9, fails: 0, busy: false, name: '' };
+const net = { i: 0, ok: null, last: -1e9, lastGood: -1e9, fails: 0, busy: false, name: '', left: 0 };
+const NET_WAIT_MS = 15000;   // a question to the flight network not answered by then is given up
+// the network counts as answering only while an answer came in the last 40 seconds, whatever is still on its way
+const netAnswering = () => net.ok === true && nowS() - net.lastGood < 40;
 // When several people watch the same sky the relay hands out one shared answer and says how many seconds old it is.
 // Adding that to each aircraft's own age puts it where it is now, not where it was.
 function aged(list, d) { const age = +d.relay_age || 0; if (age > 0) for (const a of list) a.seen_pos = (a.seen_pos || 0) + age; return list; }
+// the middle of the area asked about: the centre of the sky, or a followed flight once it has left that area
+function netCenter() { const far = followOwns() && gcDist(C.lat, C.lon, pose.lat, pose.lon) > 60; return far ? { lat: pose.lat, lon: pose.lon } : { lat: C.lat, lon: C.lon }; }
 function netRadiusNm() { const mi = S.radius > 0 ? Math.max(S.radius * 1.5, 40) : 140; return Math.round(clamp(mi * 0.869, 35, 130)); }
 async function netTick(force) {
   if (!__NET__ || S.src === 'antenna' || net.busy || (!MANUAL && document.hidden)) return;
-  const list0 = netSources(), t = nowS(), src = list0[net.i % list0.length]; if (!force && t - net.last < src.every) return;
+  const list0 = netSources(), t = nowS();
+  // The relay at home is the way that works best: a network asked straight from the browser is a stand-in for a short while only,
+  // so go back to the relay a minute after leaving it
+  if (net.i % list0.length !== 0 && list0[0].name === 'the relay' && t - net.left > 60) { net.i = 0; net.fails = 0; }
+  const src = list0[net.i % list0.length]; if (!force && t - net.last < src.every) return;
   net.busy = true; net.last = t;
   // ask around the centre of the sky, or around a followed flight once it has left that area
-  const far = followOwns() && gcDist(C.lat, C.lon, pose.lat, pose.lon) > 60, la = far ? pose.lat : C.lat, lo = far ? pose.lon : C.lon;
+  const { lat: la, lon: lo } = netCenter();
   try {
     // The question is rounded to a tenth of a degree, about seven miles, and reaches a little wider to make up for it. So the exact
     // spot on screen, which may be somebody's house, never leaves this browser, and people watching the same area share one answer.
-    const d = await getJSON(src.url((Math.round(la * 10) / 10).toFixed(1), (Math.round(lo * 10) / 10).toFixed(1), netRadiusNm() + 5) + (MANUAL && fakeT ? '?t=' + fakeT : ''));
+    // An answer that never comes would hold every later question back for good, while the corner still showed the network as
+    // working (a computer waking from sleep, or a connection the tunnel dropped, can leave a question hanging), so give up after 15 seconds.
+    const stop = typeof AbortController === 'function' ? new AbortController() : null, timer = stop && setTimeout(() => stop.abort(), NET_WAIT_MS);
+    let d; try { d = await getJSON(src.url((Math.round(la * 10) / 10).toFixed(1), (Math.round(lo * 10) / 10).toFixed(1), netRadiusNm() + 5) + (MANUAL && fakeT ? '?t=' + fakeT : ''), stop ? { signal: stop.signal } : null); } finally { if (timer) clearTimeout(timer); }
     const list = (d.ac || d.aircraft || []).filter((a) => a && a.lat != null && a.lon != null && a.alt_baro !== 'ground');
     aged(list, d);
     for (const a of list) a._d = gcDist(la, lo, a.lat, a.lon);
@@ -489,7 +506,7 @@ async function netTick(force) {
     net.ok = true; net.fails = 0; net.lastGood = nowS(); net.name = src.name;
   } catch (e) {
     net.fails++; if (nowS() - net.lastGood > 40) net.ok = false;
-    if (net.fails >= 2 && !Q.has('netApi')) { net.i = (net.i + 1) % list0.length; net.fails = 0; }   // try the next one
+    if (net.fails >= 2 && !Q.has('netApi')) { if (net.i % list0.length === 0) net.left = nowS(); net.i = (net.i + 1) % list0.length; net.fails = 0; }   // try the next one
   }
   net.busy = false;
 }
@@ -733,7 +750,7 @@ function watchWhere(w) {
   if (!w) return '';
   const bits = [];
   const type = prettyType(String(w.type || '')); if (type) bits.push(type);
-  bits.push(w.ground ? 'on the ground' : fmtInt(Math.round((w.alt || 0) / 100) * 100) + ' feet');
+  bits.push(altWords(w.ground, w.alt || 0, 100));
   if (w.heard) bits.push('heard by ' + ANT);
   const near = nearestAirport(w.lat, w.lon, 60), miles = gcDist(C.lat, C.lon, w.lat, w.lon) / MI;
   if (near) bits.push('near ' + (near[3] || near[2]));
@@ -1061,22 +1078,24 @@ function updateCaption(t) {
   const show = active && (S.captions || cl) && (cl || (t - shot.t0) > shot.dur * 0.55);
   if (show) {
     const cs = p.callsign(), al = airlineName(cs), info = capInfo || {};
-    // A regional airline that flies for one partner only is shown the way its passengers know it: the partner's name and flight number.
-    const own = /^[A-Z]{3}\d/.test(cs) ? cs.slice(0, 3) : '', partner = own && PAINT_AS[own] && AIRLINES[PAINT_AS[own]];
-    $('c-air').textContent = partner ? partner[1] + ', operated by ' + (AIRLINES[own] ? AIRLINES[own][1] : own) : al || (cs ? '' : 'Unidentified aircraft');
+    const known = routes.get(cs), leg = routeLeg(capRoute || (known && known.route), p);   // a route that came in after the caption asked (version 3.9) is shown too
+    // A regional airline is shown the way its passengers know it: the partner's name and flight number (version 3.10 adds
+    // the ones that fly for several partners, named from the route), or that it is flying for a partner when that is not known.
+    const own = /^[A-Z]{3}\d/.test(cs) ? cs.slice(0, 3) : '', pt = partnerOf(cs, leg), partner = pt && pt.key && AIRLINES[pt.key], ownName = AIRLINES[own] ? AIRLINES[own][1] : al || own;
+    $('c-air').textContent = partner ? partner[1] + ', operated by ' + ownName : pt && pt.some ? ownName + ', flying for a partner' : al || (cs ? (/^[A-Z]{3}\d/.test(cs) ? '' : 'Private aircraft') : 'Unidentified aircraft');   // a callsign that is a tail number, not an airline's: say so rather than leave the line empty
     $('c-flight').textContent = cs ? (partner ? partner[0] + ' ' + cs.slice(3) : cs.replace(/^([A-Z]{3})(\d)/, '$1 $2')) : (info.reg || p.hex.toUpperCase());
     let route = '';
-    const known = routes.get(cs), leg = routeLeg(capRoute || (known && known.route), p);   // a route that came in after the caption asked (version 3.9) is shown too
     if (!leg && !p.ground && p.altFt < 4500) {   // no route to trust, but low beside an airport: say what can be seen
       const near = nearestAirport(p.rLat, p.rLon, 32);
       if (near) route = `<span style="margin-left:0">${p.vrate < -200 ? 'Arriving at' : p.vrate > 300 ? 'Departing' : 'Near'}</span> ${esc(near[3] || near[2])} <i>${esc(near[1] || near[0])}</i>`;
     }
     if (leg) route = routeHtml(leg, p);
+    else if (!route && !p.ground && /^[A-Z]{3}\d/.test(cs)) route = '<span style="margin-left:0">Route not known</span>';   // an airline flight with no route found: say so rather than leave the line empty (version 3.10)
     if ($('c-route')._h !== route) { $('c-route').innerHTML = route; $('c-route')._h = route; }
     const trend = p.vrate > 350 ? 'climbing' : p.vrate < -350 ? 'descending' : '';
     const bits = [];
     const long = prettyType(info.long || '') || info.type || p.type || ''; if (long) bits.push(esc(long));
-    bits.push(p.ground ? 'on the ground' : `${fmtInt(Math.round(p.altFt / 25) * 25)} feet${trend ? ' ' + trend : ''}`);
+    bits.push(altWords(p.ground, p.altFt, 25) + (trend && !p.ground && p.altFt > 100 ? ' ' + trend : ''));
     if (p.gs > 1) bits.push(`${fmtInt(p.gs * 1.15078)} mph`);
     const h = bits.map((b) => `<b>${b}</b>`).join('');
     if ($('c-data')._h !== h) { $('c-data').innerHTML = h; $('c-data')._h = h; }
@@ -1096,9 +1115,9 @@ function updateCaption(t) {
   // quiet status line
   let msg = '';
   const netOn = __NET__ && S.src !== 'antenna';
-  if (__NET__ && !dataBase && netOn) msg = net.ok === false ? (relayBase() || Q.has('netApi') ? 'The flight network is not answering. Trying again.' : 'This copy cannot reach the flight network by itself. The network edition needs its relay, which runs on a receiver at home.') : '';
+  if (__NET__ && !dataBase && netOn) msg = net.ok === false || (net.ok === true && !netAnswering()) ? (relayBase() || Q.has('netApi') ? 'The flight network is not answering. Trying again.' : 'This copy cannot reach the flight network by itself. The network edition needs its relay, which runs on a receiver at home.') : '';
   else if (!dataBase) msg = pollFails >= 2 ? (__NET__ ? 'No receiver found here. To watch without one, open the settings and choose the flight network under "Aircraft from".' : 'No receiver found. Open this page from the address of the Raspberry Pi, not from the downloaded file.') : '';
-  else if (t - lastGood > 15 && !(netOn && net.ok)) msg = 'The receiver has stopped answering. Trying again.';
+  else if (t - lastGood > 15 && !(netOn && netAnswering())) msg = 'The receiver has stopped answering. Trying again.';
   else if (follow.want && follow.state === 'looking' && t - follow.since > 4) msg = follow.netOk ? `Looking for ${follow.want}. It is not in the air within reach yet.` : `Looking for ${follow.want} with ${ANT} only. The internet lookup did not answer.`;
   else if (shot.kind === 'wide' && t - shot.t0 > shot.dur + shot.hold + 3 && !paused && !candidates().length) msg = planes.size ? `No aircraft within ${S.radius} miles of ${C.short} right now.` : 'No aircraft heard right now.';
   else if (paused && shot.kind === 'visit') msg = 'Holding on this aircraft. Press the space bar to move on.';
@@ -1462,9 +1481,12 @@ async function prefetchRoutes() {
 // a route to trust, as the two airports of the leg being flown: the same guard the caption uses, so a wrong entry in the route
 // table never turns up as a search result
 function routeOf(p) { const c = routes.get(p.callsign()); return routeLeg(c && c.route, p); }
+// Altitude in words. The pressure altitude a receiver hears is not corrected for the day's air pressure, so an aircraft close
+// to the ground can read a little below zero (version 3.10): anything at or below 100 feet is said to be near the ground.
+function altWords(ground, ft, step) { return ground ? 'on the ground' : ft <= 100 ? 'near the ground' : fmtInt(Math.round(ft / step) * step) + ' feet'; }
 function flightLabel(p) {
   const cs = p.callsign(); if (!cs) return p.reg || p.hex.toUpperCase();
-  const own = /^[A-Z]{3}\d/.test(cs) ? cs.slice(0, 3) : '', partner = own && PAINT_AS[own] && AIRLINES[PAINT_AS[own]];
+  const pt = partnerOf(cs, routeOf(p)), partner = pt && pt.key && AIRLINES[pt.key];
   return partner ? partner[0] + ' ' + cs.slice(3) : cs.replace(/^([A-Z]{3})(\d)/, '$1 $2');
 }
 // People search by the name on the side of the aircraft ("757", "A320"), the data carries a short code ("B752", "A320"), so spell out the common ones
@@ -1480,8 +1502,8 @@ function typeWords(c) {
   return '';
 }
 function searchText(p) {
-  const cs = p.callsign(), own = /^[A-Z]{3}\d/.test(cs) ? cs.slice(0, 3) : '', ai = own && AIRLINES[own], partner = own && PAINT_AS[own] && AIRLINES[PAINT_AS[own]];
-  const rt = routeOf(p), info = p.info || {};
+  const cs = p.callsign(), own = /^[A-Z]{3}\d/.test(cs) ? cs.slice(0, 3) : '', ai = own && AIRLINES[own], rt = routeOf(p), pt = partnerOf(cs, rt), partner = pt && pt.key && AIRLINES[pt.key];
+  const info = p.info || {};
   const ends = rt ? rt.map((a) => [a.iata, a.icao, a.name, a.location].join(' ')).join(' ') : '';
   const kind = p.category === 'A7' ? 'helicopter rotorcraft' : '';
   const h = [cs, ai ? ai[0] + cs.slice(3) : '', partner ? partner[0] + cs.slice(3) : '', airlineName(cs), partner ? partner[1] : '', p.reg, info.reg, p.hex, p.type, typeWords(p.type), p.desc, info.long, info.type, kind, ends].join(' ').toLowerCase();
@@ -1505,7 +1527,7 @@ function renderFind() {
     b.textContent = flightLabel(p) + (al ? '  ' + al : '');
     const type = prettyType((p.info && p.info.long) || p.desc || '') || p.type || '';
     const route = rt ? placeName(rt[0]) + ' to ' + placeName(rt[1]) : (/^[A-Z]{2,3}\d/.test(p.callsign()) ? 'route not known' : '');
-    s.textContent = [type, p.ground ? 'on the ground' : fmtInt(Math.round(p.altFt / 25) * 25) + ' feet', route].filter(Boolean).join('  \u00b7  ');
+    s.textContent = [type, altWords(p.ground, p.altFt, 25), route].filter(Boolean).join('  \u00b7  ');
     li.appendChild(b); li.appendChild(s); li.id = 'find-opt-' + i; li.setAttribute('role', 'option');
     li.onmouseenter = () => markFound(i);
     li.onclick = () => pickFound(p);
@@ -1581,7 +1603,7 @@ if (S.follow) setFollow(S.follow);
 if (!MANUAL) { poll(); setInterval(followTick, 1000); setInterval(watchTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { save, modelFor, routeHtml, cameraOwner, leaveControls, airportLabelAt, centerOnAirport, get labels() { return labels; }, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { get home() { return home; }, set home(v) { home = v; }, save, modelFor, routeHtml, partnerOf, altWords, updateCaption, prepareCaption, get capPlane() { return capPlane; }, cameraOwner, leaveControls, airportLabelAt, centerOnAirport, get labels() { return labels; }, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
   net, NET: __NET__ };

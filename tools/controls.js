@@ -437,6 +437,26 @@ const { chromium } = require('playwright');
     return { asked: ps.length, got, n };
   });
   ok('with a relay beside the page, routes are asked of the relay and not of the route services directly', viaRelay.asked > 0 && viaRelay.got.some(Boolean) && viaRelay.n.relay >= viaRelay.asked && viaRelay.n.direct === 0, JSON.stringify(viaRelay));
+  // ---------- version 3.10: regional airlines under their partner's name, and altitudes near the ground ----------
+  const regional = await page.evaluate(() => { const f = window.__sky.partnerOf, ap = (a, b) => [{ iata: a }, { iata: b }], k = (x) => (x ? x.key || (x.some ? 'some' : '?') : 'own');
+    return { rpaBos: k(f('RPA5604', ap('MEM', 'BOS'))), rpaNone: k(f('RPA5604', null)), rpaLga: k(f('RPA4400', ap('LGA', 'ROC'))), skwDen: k(f('SKW3000', ap('DEN', 'BIL'))), skwSea: k(f('SKW3000', ap('SEA', 'GEG'))), edv: k(f('EDV5000', null)), qxe: k(f('QXE2100', null)), dal: k(f('DAL1311', ap('PBI', 'ATL'))), tail: k(f('N345MG', null)) }; });
+  ok('a regional airline that flies for several partners is named for the one whose hub is on its route, and otherwise flies for a partner', regional.rpaBos === 'DAL' && regional.rpaNone === 'some' && regional.rpaLga === 'some' && regional.skwDen === 'UAL' && regional.skwSea === 'some' && regional.edv === 'DAL' && regional.qxe === 'ASA' && regional.dal === 'own' && regional.tail === 'own', JSON.stringify(regional));
+  const low = await page.evaluate(() => { const w = window.__sky.altWords; return { neg: w(false, -150, 25), low: w(false, 75, 25), up: w(false, 2450, 25), ground: w(true, 0, 25) }; });
+  ok('an aircraft reading below zero or within 100 feet of it is near the ground, not at minus so many feet', low.neg === 'near the ground' && low.low === 'near the ground' && low.up === '2,450 feet' && low.ground === 'on the ground', JSON.stringify(low));
+  // the count in the corner: the antenna's own aircraft are counted at home, and not while the sky shown is far away
+  const atHome = await rel.evaluate(() => document.getElementById('k-src').textContent);
+  const hadHome = await rel.evaluate(() => { const s = window.__sky, had = s.home; if (!had) s.home = { lat: 41.16, lon: -73.13 }; s.S.center = 'OTHER'; s.S.other = 'KLAX'; s.applyCenter(false); return !!had; });   // a receiver in Connecticut, where the stand-in antenna is
+  await rel.waitForTimeout(3000);
+  const farAway = await rel.evaluate(() => document.getElementById('k-src').textContent);
+  await rel.evaluate((had) => { const s = window.__sky; if (!had) s.home = null; s.S.center = 'MID'; s.S.other = ''; s.applyCenter(false); }, hadHome);
+  ok('the corner counts the antenna aircraft at home, and says the antenna is far away while the sky shown is somewhere else', / by /.test(atHome) && /far from here/.test(farAway) && !/ by /.test(farAway), JSON.stringify({ atHome, farAway }));
+  // a question to the flight network that is never answered is given up after 15 seconds, so the page asks again, and the corner
+  // stops counting the network as answering; once the network answers again its aircraft come back
+  await rel.evaluate(() => fetch('/ctl/hangnet?on=1')); await rel.waitForTimeout(18000);
+  const netHang = await rel.evaluate(() => ({ fails: window.__sky.net.fails, busy: window.__sky.net.busy, i: window.__sky.net.i }));
+  await rel.evaluate(() => fetch('/ctl/hangnet?on=0')); await rel.waitForTimeout(8000);
+  const netBack = await rel.evaluate(() => ({ answered: performance.now() / 1000 - window.__sky.net.lastGood < 8 || window.__sky.net.fails === 0, text: document.getElementById('k-src').textContent }));
+  ok('a question to the flight network that never gets an answer is given up, and the network aircraft come back once it answers again', (netHang.fails >= 1 || netHang.i > 0) && netBack.answered && /[1-9]\d* more from the flight network/.test(netBack.text), JSON.stringify({ netHang, netBack }));
   await rel.close(); await page.bringToFront();
   // ---------- version 3.8: satellite photos on the ground ----------
   // off by default: no photo is asked for and no credit line shows
