@@ -93,6 +93,11 @@ export const PAINT_AS = { EDV: 'DAL', ENY: 'AAL', JIA: 'AAL', PDT: 'AAL', GJS: '
 // So when only one of the operator's partners has a hub at either end of the route, that partner is named. Otherwise the
 // caption says the airline is flying for a partner, and the paint stays neutral.
 export const PARTNERS = { RPA: ['AAL', 'DAL', 'UAL'], SKW: ['AAL', 'DAL', 'UAL', 'ASA'], ASH: ['UAL'] };
+// Version 3.11: where a public source shows a regional's flight numbers for one partner, the number decides first. Only ranges
+// with a source are listed here, and the hub rule above still covers everything else. Republic: 4300 to 4699 is American
+// (Pittsburgh International Airport's Blue Sky News, 2020; RPA4466 LGA to BOS is sold as American 4466 today). Airlines move
+// their number blocks with schedule changes, so a range is checked against a live flight before it goes in.
+export const NUMBERS = { RPA: [[4300, 4699, 'AAL']] };
 export const HUBS = {
   AAL: ['CLT', 'DFW', 'ORD', 'MIA', 'PHL', 'PHX', 'DCA', 'LGA', 'JFK', 'LAX'],
   DAL: ['ATL', 'DTW', 'MSP', 'SLC', 'SEA', 'LAX', 'JFK', 'LGA', 'BOS'],
@@ -106,6 +111,8 @@ export function partnerOf(cs, leg) {
   if (!own) return null;
   if (PAINT_AS[own] && AIRLINES[PAINT_AS[own]]) return { key: PAINT_AS[own] };
   const list = PARTNERS[own]; if (!list) return null;
+  const num = +cs.slice(3).replace(/[A-Z]+$/, ''), byNum = (NUMBERS[own] || []).find((r) => num >= r[0] && num <= r[1] && list.indexOf(r[2]) !== -1);
+  if (byNum) return { key: byNum[2] };
   if (leg) { const ends = leg.map((a) => a && a.iata).filter(Boolean), fit = list.filter((k) => ends.some((c) => HUBS[k].indexOf(c) !== -1)); if (fit.length === 1) return { key: fit[0] }; }
   return { some: true };
 }
