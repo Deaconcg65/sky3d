@@ -324,9 +324,10 @@ const { chromium } = require('playwright');
   await page.waitForTimeout(400);
   const ms1 = await keyState();
   ok('small scroll touches while the mouse moves do not take the controls or bring up the fly keys', ms1.kind !== 'fly' && !ms1.keys, JSON.stringify(ms1));
+  // this comes about four seconds after the last fly key of the time at the controls before, so it also shows that a new time starts with no key pressed
   await page.mouse.wheel(0, 120); await page.waitForTimeout(400);
   const ms2 = await keyState();
-  ok('a real turn of the mouse wheel still zooms by taking the controls, without the fly keys', ms2.kind === 'fly' && !ms2.keys, JSON.stringify(ms2));
+  ok('a real turn of the mouse wheel still zooms by taking the controls, without the fly keys, even just after a time at the controls that used keys', ms2.kind === 'fly' && !ms2.keys, JSON.stringify(ms2));
   await page.keyboard.press('Escape'); await page.waitForTimeout(600);
   await page.mouse.move(400, 320); await page.mouse.down(); await page.mouse.move(470, 340, { steps: 6 }); await page.mouse.up(); await page.waitForTimeout(400);
   const ms3 = await keyState();

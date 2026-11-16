@@ -890,7 +890,7 @@ function takeCamera(owner, p) {
   const t = nowS();
   if (owner === 'fly') {
     fly.last = t; if (shot.kind === 'fly') return;
-    Object.assign(fly, { lat: pose.lat, lon: pose.lon, alt: pose.alt, az: pose.az, el: pose.el, dist: pose.dist, since: t });
+    Object.assign(fly, { lat: pose.lat, lon: pose.lon, alt: pose.alt, az: pose.az, el: pose.el, dist: pose.dist, since: t, keysAt: -1e9 });   // a new time at the controls starts with no key pressed: a key sets it again just after
     paused = false; hideCaption(); begin('fly', 0.01); prevShot = null;   // start exactly where the camera is, with no glide
     return;
   }
