@@ -2,6 +2,10 @@
 
 Written for whoever picks this up next, including a code reviewer. It records what is done, what is left in order, why some choices were made, and how to build and test. Version 3.7 is pull request https://github.com/Deaconcg65/sky3d/pull/2 (branch v3.7-watch-list into main). Version 3.6 was pull request 1, merged November 15.
 
+## Guiding principle (Chris, November 16)
+
+The audience is plane geeks, and detail is key to them. For shapes, captions and the gallery, accuracy to the real aircraft comes before speed. When a shape cannot be made right, a plainer, honest one is better than a wrong one: a generic light single beats a Cessna drawn with a Cirrus's low wing, and "flying for a partner" or "route not known" beats a guessed airline or airport. Reviewers should hold changes to this.
+
 ## What this version is
 
 A self-contained 3D web page that shows live aircraft from a home Raspberry Pi ADS-B receiver (readsb and tar1090). Two editions are built from one source: the home edition (antenna only) and the network edition (antenna plus public flight networks, through the relay in relay/relay.py). The page is shared on the internet at skypuppy3d.com through a Cloudflare tunnel, so treat every viewer as untrusted.
