@@ -453,7 +453,7 @@ const { chromium } = require('playwright');
   // ---------- version 3.11: the 757, twin turboprops, and a helicopter with skids and a tail rotor ----------
   const s311 = await page.evaluate(() => {
     const s = window.__sky, kinds = {};
-    for (const t of ['B752', 'B753', 'B738', 'A321', 'B763', 'AT72', 'AT76', 'DH8D', 'D328', 'SF34', 'BE20', 'B350', 'BE9L', 'PC12', 'TBM9', 'C208', 'E75L', 'CRJ9']) kinds[t] = s.modelFor('', t);
+    for (const t of ['B752', 'B753', 'B738', 'A321', 'B763', 'AT72', 'AT76', 'DH8D', 'D328', 'J328', 'SF34', 'BE20', 'B350', 'BE9L', 'PC12', 'TBM9', 'C208', 'E75L', 'CRJ9']) kinds[t] = s.modelFor('', t);
     const body = (k) => { const m = new s.PlaneMesh(k, s.paintFor('UAL1', 'abc123', k)), pos = m.mesh.geometry.attributes.position.array; let r = 0, propFront = 0, wingHi = 0, wingLo = 0, skid = 0;
       for (let i = 0; i < pos.length; i += 3) { const x = pos[i], y = pos[i + 1], z = pos[i + 2];
         if (Math.abs(x) < 0.005 && z > -0.25 && z < 0.34) r = Math.max(r, y);                                   // how tall the body is in the middle
@@ -465,7 +465,7 @@ const { chromium } = require('playwright');
   });
   ok('the 757 gets its own shape, and the 737, A321, 767 and regional jets do not', s311.kinds.B752 === 'b757' && s311.kinds.B753 === 'b757' && s311.kinds.B738 === 'jet' && s311.kinds.A321 === 'jet' && s311.kinds.B763 === 'heavy2' && s311.kinds.E75L === 'jet' && s311.kinds.CRJ9 === 'jet', JSON.stringify(s311.kinds));
   ok('the 757 is longer and slimmer than the plain twin jet', s311.b757.len > s311.jet.len + 0.1 && s311.b757.r < s311.jet.r - 0.005, JSON.stringify({ b757: s311.b757, jet: s311.jet }));
-  ok('ATRs, Dash 8s, Dorniers and Saabs are twin turboprops with the wing on top; King Airs have it below; the PC-12, TBM and Caravan are small planes', ['AT72', 'AT76', 'DH8D', 'D328', 'SF34'].every((t) => s311.kinds[t] === 'turbo') && ['BE20', 'B350', 'BE9L'].every((t) => s311.kinds[t] === 'kingair') && ['PC12', 'TBM9', 'C208'].every((t) => s311.kinds[t] === 'light'), JSON.stringify(s311.kinds));
+  ok('ATRs, Dash 8s, Dorniers and Saabs are twin turboprops with the wing on top; King Airs have it below; the PC-12, TBM and Caravan are small planes; the Dornier 328JET keeps its jets', ['AT72', 'AT76', 'DH8D', 'D328', 'SF34'].every((t) => s311.kinds[t] === 'turbo') && ['BE20', 'B350', 'BE9L'].every((t) => s311.kinds[t] === 'kingair') && ['PC12', 'TBM9', 'C208'].every((t) => s311.kinds[t] === 'light') && s311.kinds.J328 !== 'turbo', JSON.stringify(s311.kinds));
   ok('the twin turboprop has a propeller in front of each engine, its wing above the body, and the King Air its wing below', s311.turbo.propFront > 20 && s311.turbo.wingHi > 10 && s311.turbo.wingLo === 0 && s311.kingair.propFront > 20 && s311.kingair.wingLo > 10 && s311.kingair.wingHi === 0 && s311.kingair.len < s311.turbo.len, JSON.stringify({ turbo: s311.turbo, kingair: s311.kingair }));
   ok('the helicopter stands on skids and has a rotor on its tail', s311.heli.skid > 20 && s311.heli.tailRotor, JSON.stringify(s311.heli));
   // ---------- version 3.9: the caption names both ends of the trip ----------

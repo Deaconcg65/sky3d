@@ -636,7 +636,7 @@ export function modelFor(category, type) {
   // (A three-engine Falcon 7X or 900 is drawn with two; the rear engines are what make the shape.)
   if (/^(C25|C50|C51|C52|C55|C56|C65|C68|C70|C75|CL30|CL35|CL60|GLF|GL5T|GL6T|GL7T|GLEX|GA5C|GA6C|GA7C|GA8C|E50P|E55P|LJ\d|FA\d|F2TH|F900|H25|PC24|HDJT|PRM1|BE40|G150|G280|ASTR|GALX|EA50)/.test(t)) return 'biz';
   // twin turboprops (version 3.11): ATRs, Dash 8s, Saabs, Dorniers and the like with the wing on top; King Airs and their cousins with it below
-  if (/^(AT4|AT7|DH8|SF34|SB20|D328|J328|E120|F50|SW4|C212|CN35|DHC6)/.test(t)) return 'turbo';
+  if (/^(AT4|AT7|DH8|SF34|SB20|D328|E120|F50|SW4|C212|CN35|DHC6)/.test(t)) return 'turbo';
   if (/^(BE20|BE30|B350|BE9L|BE9T|BE99|B190|BE10|P180|C425|C441|MU2|PAY\d|AC\d\d|PA31T)/.test(t)) return 'kingair';
   if (category === 'A1' || /^(C1[5-9]\d|C2\d\d|P28|PA\d|SR2|DA4|BE3[3-6]|BE5|M20|C82|C72|PC12|TBM\d|P46T|M600|PC6)/.test(t)) return 'light';   // single engine, the PC-12 and TBM turboprops included
   return 'jet';
