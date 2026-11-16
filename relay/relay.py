@@ -161,7 +161,7 @@ net_bucket, look_bucket = Bucket(NET_RATE, NET_BURST), Bucket(LOOK_RATE, LOOK_BU
 place_bucket, place_hour = Bucket(PLACE_RATE, PLACE_BURST), Bucket(PLACE_HOURLY / 3600.0, 20)
 route_bucket = Bucket(ROUTE_RATE, ROUTE_BURST)
 photo_bucket = Bucket(PHOTO_RATE, PHOTO_BURST)
-photos_kept, photos_failed = {}, {}     # photo answers by transponder code, and codes Planespotters could not answer just now
+photos_kept, photos_failed = {}, {}     # photo answers by transponder code (or code/registration), and those Planespotters could not answer just now
 routes_kept = {}                         # routes by callsign: (when, the route or None)
 places_kept, places_failed = {}, {}     # place answers by the typed words, and words the place finder could not answer just now
 viewers = {}                             # allowances per viewer; held in memory only and never written down
@@ -278,22 +278,22 @@ def photo_of(raw):
     return None
 
 
-def ask_photo(hexid, reg, may_ask_again=lambda: True):
-    """Ask Planespotters for a photo of one aircraft. Returns (worked, photo or None); worked is None when the question by
-    registration, which comes after the one by hex code, is not allowed yet by the shared allowance."""
-    headers = {'Accept': 'application/json', 'User-Agent': AGENT}
-    for n, url in enumerate([PHOTOS_HEX.format(hexid)] + ([PHOTOS_REG.format(urllib.parse.quote(reg, safe=''))] if reg else [])):
-        if n and not may_ask_again():   # every question sent counts against the allowance, the second one too
-            return None, None
-        try:
-            with outward.open(urllib.request.Request(url, headers=headers), timeout=8) as answer:
-                raw = answer.read(512 * 1024).decode('utf-8', 'replace')
-        except Exception:   # refused, slow, or not reachable
-            return False, None
-        found = photo_of(raw)
-        if found:
-            return True, found
-    return True, None
+def ask_photo_once(url):
+    """Ask Planespotters one question. Returns (worked, photo or None)."""
+    try:
+        with outward.open(urllib.request.Request(url, headers={'Accept': 'application/json', 'User-Agent': AGENT}), timeout=8) as answer:
+            raw = answer.read(512 * 1024).decode('utf-8', 'replace')
+    except Exception:   # refused, slow, or not reachable
+        return False, None
+    return True, photo_of(raw)
+
+
+def ask_photo(hexid, reg):
+    """Ask Planespotters for a photo of one aircraft, by hex code and then by registration. Returns (worked, photo or None)."""
+    worked, found = ask_photo_once(PHOTOS_HEX.format(hexid))
+    if worked and not found and reg:
+        worked, found = ask_photo_once(PHOTOS_REG.format(urllib.parse.quote(reg, safe='')))
+    return worked, found
 
 
 def airport(a):
@@ -735,44 +735,50 @@ class Relay(BaseHTTPRequestHandler):
         return 200, json.dumps(out, separators=(',', ':')), None
 
     def photo_answer(self, hexid, reg, asking):
-        """Returns (status, text, extra headers) for a photo of one aircraft: {"photo": {...}} or {"photo": null}."""
+        """Returns (status, text, extra headers) for a photo of one aircraft: {"photo": {...}} or {"photo": null}.
+        The answer by hex code is kept under the hex code alone and shared with everyone. The answer by registration is only
+        as good as the registration the viewer sent, so it is kept under the hex code and that registration together: one
+        viewer's registration never changes what another viewer sees, and a miss by hex code never stops a later question
+        by registration."""
         busy = (503, json.dumps({'error': 'Planespotters has been asked as often as it may for now. Try again in a moment.'}), {'Retry-After': '3'})
+        failed = (502, json.dumps({'error': 'Planespotters did not answer.'}), None)
         mine = lock_for('photo ' + hexid)
         if not mine.acquire(timeout=10):
             return busy
         try:
-            now = time.monotonic()
-            with lock:
-                hit, bad = photos_kept.get(hexid), photos_failed.get(hexid)
-            if hit and now - hit[0] < (PHOTO_KEEP if hit[1] else PHOTO_NONE):
-                return 200, json.dumps({'photo': hit[1]}, separators=(',', ':')), None
-            if bad and now - bad < 60:
-                return 502, json.dumps({'error': 'Planespotters did not answer.'}), None
-            with lock:
-                may_ask = photo_bucket.ready() and asking.take() and photo_bucket.take()
-            if not may_ask:
-                return busy
-            def again():
-                with lock:
-                    return photo_bucket.take()
-            worked, found = ask_photo(hexid, reg, again)
-            if worked is None:
-                return busy
-            with lock:
+            first = True
+            for key, url in [(hexid, PHOTOS_HEX.format(hexid))] + ([(hexid + '/' + reg, PHOTOS_REG.format(urllib.parse.quote(reg, safe='')))] if reg else []):
                 now = time.monotonic()
-                if worked:
-                    if len(photos_kept) > 3000:
-                        for old in sorted(photos_kept, key=lambda k: photos_kept[k][0])[:600]:
-                            del photos_kept[old]
-                    photos_kept[hexid] = (now, found)
-                    photos_failed.pop(hexid, None)
+                with lock:
+                    hit, bad = photos_kept.get(key), photos_failed.get(key)
+                if hit and now - hit[0] < (PHOTO_KEEP if hit[1] else PHOTO_NONE):
+                    found = hit[1]
+                elif bad and now - bad < 60:
+                    return failed
                 else:
-                    if len(photos_failed) > 300:
-                        photos_failed.clear()
-                    photos_failed[hexid] = now
-            if worked:
-                return 200, json.dumps({'photo': found}, separators=(',', ':')), None
-            return 502, json.dumps({'error': 'Planespotters did not answer.'}), None
+                    with lock:   # every question sent counts against the allowance, the one by registration too
+                        may_ask = photo_bucket.ready() and (asking.take() if first else True) and photo_bucket.take()
+                    if not may_ask:
+                        return busy
+                    first = False
+                    worked, found = ask_photo_once(url)
+                    with lock:
+                        now = time.monotonic()
+                        if worked:
+                            if len(photos_kept) > 3000:
+                                for old in sorted(photos_kept, key=lambda k: photos_kept[k][0])[:600]:
+                                    del photos_kept[old]
+                            photos_kept[key] = (now, found)
+                            photos_failed.pop(key, None)
+                        else:
+                            if len(photos_failed) > 300:
+                                photos_failed.clear()
+                            photos_failed[key] = now
+                    if not worked:
+                        return failed
+                if found:
+                    break
+            return 200, json.dumps({'photo': found}, separators=(',', ':')), None
         finally:
             mine.release()
 

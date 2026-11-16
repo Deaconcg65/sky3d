@@ -112,6 +112,13 @@ const OUT = { 'CF-Connecting-IP': '203.0.113.7' };   // what a request looks lik
   const ph4 = await photoAsked(), phSent = ph4.hex + ph4.reg - ph3.hex - ph3.reg;
   check('aircraft with no photo by hex code: the questions by registration count against the same allowance', phSent <= 5, phSent + ' questions to Planespotters for 6 aircraft, allowance 4 at once');
   await sleep(2100);
+  // a photo found by registration belongs to that registration only: another viewer's registration, or none, never sees it
+  await sleep(6500); const pv = (h, ip) => get('/sky-relay/photo/' + h, { 'CF-Connecting-IP': '203.0.113.' + ip }).then((r) => JSON.parse(r.text || '{}').photo);
+  const byReg = await pv('eeee10/N12345', 81); await sleep(2100); const noReg = await pv('eeee10', 82); await sleep(2100); const otherReg = await pv('eeee10/N00009', 83);
+  check('a photo found by one viewer\'s registration is not shown for the same hex code with no registration or another one', !!byReg && noReg === null && otherReg === null, JSON.stringify({ byReg: !!byReg, noReg, otherReg }));
+  await sleep(2100); const missFirst = await pv('eeee11', 84); await sleep(2100); const thenReg = await pv('eeee11/N12345', 85);
+  check('a hex code with no photo, asked first with no registration, is still asked about by registration later', missFirst === null && !!thenReg, JSON.stringify({ missFirst, thenReg: !!thenReg }));
+  await sleep(2100);
 
   // 4. pages on other sites are refused; the page from the same address is not
   const p = '/sky-relay/v2/point/40.7/-73.8/60';
