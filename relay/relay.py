@@ -10,6 +10,10 @@ This small program runs on the receiver itself and does two jobs.
    OpenStreetMap place finder (Nominatim) so that the place finder sees this receiver's address instead of each viewer's.
    For a place, only the words the viewer typed are sent, at most one question a second and about 200 an hour for everyone
    together, and answers are kept for a day so the same words are not sent twice.
+   Since version 3.9 it also asks the route services (adsb.im, then ADSB.lol) where flights are going, for up to ten
+   flights at a time, because web pages are not always allowed to ask them directly either. Only each flight's callsign
+   and roughly where it is (to a hundredth of a degree) are sent. A route found is kept for six hours and a flight no
+   service knows for ten minutes, so the same flight is not asked about again meanwhile.
 
 2. Front door, for sharing the page with people outside the house through a secure tunnel. Point the tunnel at this
    program (port 8099) and not at the receiver's web server. People outside can then reach exactly four things and
@@ -56,15 +60,23 @@ NETWORKS = [
 # The place finder. Its rules: no more than one request a second, a name for the program that asks, answers kept and not
 # asked for again, and no searching as someone types. The page asks only when the viewer presses Enter or Find.
 PLACES = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&q={0}'
+# The route services, asked in this order. When neither answers at all, the route table they are both built from is read
+# instead, a few flights at a time; that table cannot say whether a route fits where the aircraft is, so it is used only then.
+ROUTE_SERVICES = [('adsb.im', 'https://adsb.im/api/0/routeset'), ('adsb.lol', 'https://api.adsb.lol/api/0/routeset')]
+STANDING = 'https://vrs-standing-data.adsb.lol/routes/{0}/{1}.json'
 TEST = os.environ.get('SKY3D_RELAY_TEST')   # for testing only: one stand-in network at this address
 if TEST:
     NETWORKS = [('stand-in', TEST + '/v2/point/{0}/{1}/{2}', TEST + '/v2/callsign/{0}', TEST + '/v2/reg/{0}')]
     PLACES = TEST + '/search?format=jsonv2&limit=5&q={0}'
+    ROUTE_SERVICES = [('stand-in', TEST + '/routeset')]
+    STANDING = TEST + '/standing/{0}/{1}.json'
 
 A = re.ASCII
 POINT = re.compile(r'/v2/point/(-?[0-9]{1,2}(?:\.[0-9]{1,4})?)/(-?[0-9]{1,3}(?:\.[0-9]{1,4})?)/([0-9]{1,3})', A)
 CALLSIGN = re.compile(r'/v2/callsign/([A-Za-z0-9]{2,8})', A)
 REG = re.compile(r'/v2/reg/([A-Za-z0-9-]{2,8})', A)
+ROUTE_ITEM = r'([A-Z0-9]{2,8}),(-?[0-9]{1,2}(?:\.[0-9]{1,2})?),(-?[0-9]{1,3}(?:\.[0-9]{1,2})?)'
+ROUTES = re.compile(r'/routes/(%s(?:;%s){0,9})' % (ROUTE_ITEM, ROUTE_ITEM), A)   # up to ten flights: callsign, latitude, longitude
 PLACE = re.compile(r"/place/([A-Za-z0-9%._~!$&'()*+,;=:@-]{1,280})", A)   # the typed words, as the page encodes them
 # What the page reads from the receiver's own web server. Nothing outside these patterns is ever fetched from it.
 AIRCRAFT = re.compile(r'/(?:tar1090/data|data|skyaware/data)/aircraft\.json', A)
@@ -94,6 +106,9 @@ ASK_RATE, ASK_BURST = float(os.environ.get('SKY3D_ASK_RATE', '0.5')), 5         
 PLACE_RATE, PLACE_BURST = 1.0, 1          # questions a second to the place finder, for all viewers together: its own limit
 PLACE_HOURLY = 200                         # and about this many an hour, so nobody can turn the relay into a heavy user of it
 PLACE_KEEP = 24 * 3600.0                   # a place found is kept this long, and the same words are not sent again meanwhile
+ROUTE_RATE, ROUTE_BURST = 0.5, 10        # questions a second to the route services, for all viewers together
+ROUTE_VIEWER_RATE, ROUTE_VIEWER_BURST = 0.25, 5   # route questions one viewer may cause, half of all, so no one viewer can use up the rest
+ROUTE_KEEP, ROUTE_NONE = 6 * 3600.0, 600.0   # a route found is kept this long; a flight no service knows is not asked about again for this long
 MAX_BODY = 8 * 1024 * 1024
 MAX_AT_ONCE = 48        # requests being answered at once
 MAX_CONNECTIONS = 96    # connections open at once
@@ -127,6 +142,8 @@ lock = threading.Lock()
 kept, failed, best = {}, {}, [0]         # flight network answers by question, questions nobody could answer, and which network answered last
 net_bucket, look_bucket = Bucket(NET_RATE, NET_BURST), Bucket(LOOK_RATE, LOOK_BURST)
 place_bucket, place_hour = Bucket(PLACE_RATE, PLACE_BURST), Bucket(PLACE_HOURLY / 3600.0, 20)
+route_bucket = Bucket(ROUTE_RATE, ROUTE_BURST)
+routes_kept = {}                         # routes by callsign: (when, the route or None)
 places_kept, places_failed = {}, {}     # place answers by the typed words, and words the place finder could not answer just now
 viewers = {}                             # allowances per viewer; held in memory only and never written down
 local, local_failed, locks = {}, {}, {}  # antenna data fetched from the receiver's web server, and one lock per question
@@ -215,6 +232,97 @@ def ask_places(text):
         kind = p.get('type') if isinstance(p.get('type'), str) else ''
         out.append({'name': ' '.join(p['display_name'].split())[:160], 'lat': round(lat, 5), 'lon': round(lon, 5), 'kind': kind[:30]})
     return True, status, json.dumps({'places': out}, separators=(',', ':'))
+
+
+def airport(a):
+    """One airport of a route, rebuilt from its names and position only."""
+    if not isinstance(a, dict):
+        return None
+    try:
+        lat, lon = float(a.get('lat')), float(a.get('lon'))
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(lat) and math.isfinite(lon) and abs(lat) <= 90 and abs(lon) <= 180):
+        return None
+    out = {k: ' '.join(a[k].split())[:80] for k in ('name', 'location', 'iata', 'icao') if isinstance(a.get(k), str)}
+    out.update(lat=round(lat, 5), lon=round(lon, 5))
+    return out
+
+
+def route_of(x, judged=True):
+    """A route as the page reads it, or None when it is not one to show: two or more airports, and not marked by the
+    service as impossible for where the aircraft is."""
+    if not isinstance(x, dict) or not isinstance(x.get('_airports'), list):
+        return None
+    aps = [airport(a) for a in x['_airports'][:8]]
+    if len(aps) < 2 or not all(aps) or (judged and x.get('plausible') in (False, 0)):
+        return None
+    return {'airport_codes': '-'.join(a.get('icao') or a.get('iata') or '?' for a in aps), '_airports': aps}
+
+
+def post_routes(url, flights):
+    """Ask one route service about some flights. Returns its answers by callsign, or None when it did not answer."""
+    body = json.dumps({'planes': [{'callsign': c, 'lat': la, 'lng': lo} for c, la, lo in flights]}).encode('utf-8')
+    headers = {'Accept': 'application/json', 'Content-Type': 'application/json; charset=utf-8', 'User-Agent': AGENT}
+    try:
+        with outward.open(urllib.request.Request(url, data=body, headers=headers, method='POST'), timeout=8) as answer:
+            data = json.loads(answer.read(1024 * 1024).decode('utf-8', 'replace'))
+    except Exception:   # the service is down, slow, refuses, or sent something that is not JSON
+        return None
+    if not isinstance(data, list):
+        return None
+    return {x.get('callsign'): x for x in data if isinstance(x, dict) and isinstance(x.get('callsign'), str)}
+
+
+def ask_routes(flights):
+    """Ask the route services about some flights, given as (callsign, latitude, longitude). Returns (found, unknown,
+    doubted): the routes found by callsign, the callsigns a service answered for with no route at all, and the callsigns
+    whose route a service judged impossible for the position given. A flight in none of these was not answered for.
+    Only "unknown" may be remembered by callsign alone: "doubted" depends on the position the asker sent, and anyone
+    can send any position. Only the callsigns and positions are sent."""
+    found, unknown, doubted, answered = {}, set(), set(), False
+    left = list(flights)
+    for _, url in ROUTE_SERVICES:
+        if not left:
+            break
+        with lock:
+            if not route_bucket.take():
+                break
+        got = post_routes(url, left)
+        if got is None:
+            continue
+        answered = True
+        for c, _, _ in left:
+            r = route_of(got.get(c))
+            if r:
+                found[c] = r
+                doubted.discard(c)
+            elif route_of(got.get(c), judged=False):
+                doubted.add(c)   # the service has a route, but not one this position fits
+        left = [f for f in left if f[0] not in found]
+    if answered:
+        unknown.update(c for c, _, _ in left if c not in doubted)
+    elif STANDING:
+        for c, _, _ in left[:4]:   # neither service answered: read the route table itself, a few flights at a time
+            if not re.fullmatch(r'[A-Z]{2,3}[0-9][A-Z0-9]{0,4}', c, A):
+                continue
+            with lock:
+                if not route_bucket.take():
+                    break
+            try:
+                with outward.open(urllib.request.Request(STANDING.format(c[:2], c), headers={'Accept': 'application/json', 'User-Agent': AGENT}), timeout=6) as answer:
+                    r = route_of(json.loads(answer.read(256 * 1024).decode('utf-8', 'replace')), judged=False)
+            except urllib.error.HTTPError as e:
+                if e.code == 404:   # the table has no route for this flight
+                    unknown.add(c)
+                continue
+            except Exception:
+                continue
+            if r:
+                found[c] = r
+            else:
+                unknown.add(c)
+    return found, unknown, doubted
 
 
 def from_web(path):
@@ -341,7 +449,7 @@ class Relay(BaseHTTPRequestHandler):
                 if len(viewers) > 4000:   # still too many: let go of the ones that have been quiet longest
                     for old in sorted(viewers, key=lambda k: viewers[k][0].t)[:1000]:
                         del viewers[old]
-            return viewers.setdefault(viewer, (Bucket(VIEWER_RATE, VIEWER_BURST), Bucket(ASK_RATE, ASK_BURST)))
+            return viewers.setdefault(viewer, (Bucket(VIEWER_RATE, VIEWER_BURST), Bucket(ASK_RATE, ASK_BURST), Bucket(ROUTE_VIEWER_RATE, ROUTE_VIEWER_BURST)))
 
     # ---------- the requests ----------
     def do_OPTIONS(self):
@@ -383,7 +491,7 @@ class Relay(BaseHTTPRequestHandler):
             return self.say(404, 'Not found')
         path = self.path.split('?', 1)[0]
         viewer, outside = self.who()
-        general, asking = self.allowances(viewer)
+        general, asking, routing = self.allowances(viewer)
         with lock:
             allowed = general.take()
         if not allowed:
@@ -419,6 +527,10 @@ class Relay(BaseHTTPRequestHandler):
             return self.say(200, '3D sky relay is running.')
         if path == '/check' and not outside:   # which flight networks answer this relay. Only from another computer inside the house.
             return self.send_check()
+        m = ROUTES.fullmatch(path)
+        if m:
+            status, body, extra = self.route_answer(m.group(1), routing)
+            return self.reply(status, body, extra=extra)
         m = PLACE.fullmatch(path)
         if m:
             status, body, extra = self.place_answer(m.group(1), asking)
@@ -497,10 +609,61 @@ class Relay(BaseHTTPRequestHandler):
                 started = time.time()
                 worked, status, text, count = ask(point.format('40.7', '-73.8', '5'))
                 report[name] = {'answered': worked, 'status': status, 'milliseconds': int((time.time() - started) * 1000), 'aircraft': count, 'says': '' if worked else text[:160]}
+            for name, url in ROUTE_SERVICES:   # and the route services (version 3.9), asked about one well-known flight
+                started = time.time()
+                got = post_routes(url, [('DAL1311', 26.7, -80.1)])
+                report['routes from ' + name] = {'answered': got is not None, 'milliseconds': int((time.time() - started) * 1000), 'knows the test flight': bool(got and route_of(got.get('DAL1311'), judged=False))}
             recent = json.dumps(report, indent=1)
             with lock:
                 checked[0], checked[1] = time.monotonic(), recent
         self.reply(200, recent)
+
+    def route_answer(self, items, routing):
+        """Returns (status, text, extra headers) for up to ten flights' routes: a list with an entry for each flight that
+        could be answered for, its airports empty when no service knows a route to show."""
+        flights, seen = [], set()
+        for item in items.split(';'):
+            c, la, lo = item.split(',')
+            la, lo = float(la), float(lo)
+            if c not in seen and abs(la) <= 90 and abs(lo) <= 180:
+                seen.add(c)
+                flights.append((c, la, lo))
+        out, ask = [], []
+        with lock:
+            now = time.monotonic()
+            for f in flights:
+                hit = routes_kept.get(f[0])
+                if hit and now - hit[0] < (ROUTE_KEEP if hit[1] else ROUTE_NONE):
+                    out.append(dict(hit[1], callsign=f[0]) if hit[1] else {'callsign': f[0], '_airports': []})
+                else:
+                    ask.append(f)
+        if ask:
+            with lock:   # the viewer's own allowance first, so one viewer cannot spend what the route services allow everyone
+                may_ask = route_bucket.ready() and routing.take()
+            if not may_ask:
+                if out:
+                    return 200, json.dumps(out, separators=(',', ':')), None
+                return 503, json.dumps({'error': 'The route services have been asked as often as they may for now. Try again in a moment.'}), {'Retry-After': '4'}
+            found, unknown, doubted = ask_routes(ask)
+            with lock:
+                now = time.monotonic()
+                if len(routes_kept) > 5000:
+                    for old in [k for k, v in routes_kept.items() if now - v[0] > (ROUTE_KEEP if v[1] else ROUTE_NONE)]:
+                        del routes_kept[old]
+                    if len(routes_kept) > 5000:
+                        for old in sorted(routes_kept, key=lambda k: routes_kept[k][0])[:1000]:
+                            del routes_kept[old]
+                for c, r in found.items():
+                    routes_kept[c] = (now, r)
+                    out.append(dict(r, callsign=c))
+                for c in unknown:
+                    routes_kept[c] = (now, None)
+                    out.append({'callsign': c, '_airports': []})
+                for c in doubted:   # answered for this asker only, and not remembered, so a wrong position cannot hide a route from others
+                    out.append({'callsign': c, '_airports': []})
+        if not out:
+            return 502, json.dumps({'error': 'The route services did not answer.'}), None
+        return 200, json.dumps(out, separators=(',', ':')), None
 
     def place_answer(self, encoded, asking):
         """Returns (status, text, extra headers) for one typed place. The words are the only thing sent on."""

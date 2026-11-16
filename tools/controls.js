@@ -284,8 +284,8 @@ const { chromium } = require('playwright');
   const shapes = await page.evaluate(() => { const f = window.__sky.modelFor, out = {};
     for (const [cat, t] of [['A1', 'C172'], ['', 'C172'], ['', 'C177'], ['', 'C17'], ['', 'H25B'], ['', 'H60'], ['', 'H500'], ['', 'A318'], ['', 'A319'], ['', 'A310'], ['', 'B744'], ['', 'A388'], ['A7', '']]) out[cat + ':' + t] = f(cat, t);
     return out; });
-  ok('a Cessna 172 or 177 is drawn as a small plane, and only the C-17 as the big four-engine jet', shapes['A1:C172'] === 'light' && shapes[':C172'] === 'light' && shapes[':C177'] === 'light' && shapes[':C17'] === 'heavy' && shapes[':B744'] === 'heavy' && shapes[':A388'] === 'heavy', JSON.stringify(shapes));
-  ok('a Hawker H25B is drawn as a jet, while H60, H500 and category A7 stay helicopters', shapes[':H25B'] === 'jet' && shapes[':H60'] === 'heli' && shapes[':H500'] === 'heli' && shapes['A7:'] === 'heli', JSON.stringify(shapes));
+  ok('a Cessna 172 or 177 is drawn as a small plane, the C-17 as a four-engine jet, and the 747 and A380 each as their own shape', shapes['A1:C172'] === 'light' && shapes[':C172'] === 'light' && shapes[':C177'] === 'light' && shapes[':C17'] === 'heavy' && shapes[':B744'] === 'b747' && shapes[':A388'] === 'a380', JSON.stringify(shapes));
+  ok('a Hawker H25B is drawn as a business jet, while H60, H500 and category A7 stay helicopters', shapes[':H25B'] === 'biz' && shapes[':H60'] === 'heli' && shapes[':H500'] === 'heli' && shapes['A7:'] === 'heli', JSON.stringify(shapes));
   ok('the A318 and A319 are drawn as narrow bodies and the A310 as a wide body', shapes[':A318'] === 'jet' && shapes[':A319'] === 'jet' && shapes[':A310'] === 'heavy2', JSON.stringify(shapes));
   // ---------- version 3.8.1: the keyboard comes back to the sky, and the fly keys show while flying ----------
   const keyState = () => page.evaluate(() => ({ panel: document.body.classList.contains('panel'), mine: !document.getElementById('mine').hidden, kind: window.__sky.shot.kind, focus: document.activeElement.tagName, keys: document.getElementById('flykeys').classList.contains('on') }));
@@ -316,6 +316,128 @@ const { chromium } = require('playwright');
   const fk6 = await keyState();
   ok('a click on the sky closes My places and gives the keyboard back', !fk6.mine && fk6.focus === 'BODY', JSON.stringify(fk6));
   await page.keyboard.press('Escape'); await page.waitForTimeout(400);
+  // ---------- version 3.9: the camera has one owner at a time ----------
+  const owners = await page.evaluate(() => {
+    const s = window.__sky, out = [], ps = [...s.planes.values()].filter((q) => q.lat !== null && q.opacity > 0.5 && q.callsign() && !q.remote);
+    const note = (step) => out.push(step + ':' + s.cameraOwner());
+    s.setFollow(''); s.autoTour(); note('start');
+    s.enterFly(); note('F'); s.lockOn(ps[0]); note('double click'); s.enterFly(); note('F again');
+    s.setFollow(ps[1].callsign()); s.matchFollow(); s.follow.hex = s.matchFollow().hex; s.follow.state = 'on'; note('follow from fly');
+    s.enterFly(); note('F while following'); s.leaveControls(); note('Escape while following');
+    s.autoTour(); note('A while following'); s.setFollow(''); note('stop following');
+    return out.join(' ');
+  });
+  ok('the camera has one owner at a time and each key hands it on as before', owners === 'start:tour F:fly double click:lock F again:fly follow from fly:follow F while following:fly Escape while following:follow A while following:tour stop following:tour', owners);
+  // ---------- version 3.9: a click on an airport code centers the sky there ----------
+  await page.evaluate(() => { const s = window.__sky; s.S.center = 'MID'; s.applyCenter(false); s.goWide(); });
+  await page.waitForTimeout(9000);
+  // a label on screen with no aircraft right under it. Aircraft keep landing beside the big airports, so a label that is busy now
+  // is often clear a moment later: look again for up to 20 seconds before calling it missing, and say what was seen if none clears.
+  let spot = null, seen = null;
+  for (let tries = 0; tries < 20 && !spot; tries++) {
+    if (tries) await page.waitForTimeout(1000);
+    const r = await page.evaluate(() => {
+      const s = window.__sky, cam = s.camera, w = innerWidth, h = innerHeight, n = { labels: 0, onScreen: 0, inBox: 0, hit: 0, busy: 0 }; cam.updateMatrixWorld();
+      for (const l of s.labels) {
+        if (!l.a) continue; n.labels++; const v = l.sprite.position.clone().project(cam); if (v.z > 1 || v.z < -1) continue; n.onScreen++;
+        const x = (v.x * 0.5 + 0.5) * w, y = (-v.y * 0.5 + 0.5) * h - 0.9 * 0.021 * h;
+        if (x < 40 || x > w - 420 || y < 40 || y > h - 80) continue; n.inBox++;
+        if (s.airportLabelAt(x, y) !== l.a) continue; n.hit++;
+        const busy = [...s.planes.values()].some((p) => { if (p.lat === null || p.opacity < 0.3) return false; const q = p.pos.clone().project(cam); return Math.hypot((q.x * 0.5 + 0.5) * w - x, (-q.y * 0.5 + 0.5) * h - y) < 24; });
+        if (busy) { n.busy++; continue; }
+        return { spot: { x, y, code: l.a[0] } };
+      }
+      return { n, kind: s.cameraOwner() };
+    });
+    if (r.spot) spot = r.spot; else seen = r;
+  }
+  if (!spot) ok('an airport code label is on screen to click', false, 'none found ' + JSON.stringify(seen));
+  else {
+    await page.mouse.click(spot.x, spot.y); await page.waitForTimeout(500);
+    const after = await page.evaluate(() => { const s = window.__sky; return { center: s.S.center, other: s.S.other, clicked: !!s.clicked }; });
+    ok('a click on an airport code label centers the sky on that airport', (after.center === spot.code || (after.center === 'OTHER' && after.other === spot.code)) && !after.clicked, JSON.stringify({ spot, after }));
+  }
+  // an aircraft right under the pointer still gets the click, even where a label is close by
+  await page.waitForTimeout(8000);
+  const planeFirst = await page.evaluate(() => {
+    const s = window.__sky, cam = s.camera, w = innerWidth, h = innerHeight, before = s.S.center + ':' + s.S.other; cam.updateMatrixWorld();
+    const p = [...s.planes.values()].find((q) => { if (q.lat === null || q.opacity < 0.5 || !q.fresh(performance.now() / 1000)) return false; const v = q.pos.clone().project(cam); return v.z < 1 && v.z > -1 && Math.abs(v.x) < 0.8 && Math.abs(v.y) < 0.8; });
+    if (!p) return { none: true };
+    const v = p.pos.clone().project(cam); s.clickAt((v.x * 0.5 + 0.5) * w, (-v.y * 0.5 + 0.5) * h);
+    return { got: s.clicked === p, same: before === s.S.center + ':' + s.S.other };
+  });
+  ok('a click right on an aircraft shows that aircraft and does not move the sky', planeFirst.got && planeFirst.same, JSON.stringify(planeFirst));
+  await page.evaluate(() => { const s = window.__sky; s.S.center = 'MID'; s.save(); s.applyCenter(false); });
+  await page.keyboard.press('Escape'); await page.waitForTimeout(400);
+  // ---------- version 3.9: realistic shapes ----------
+  const shp = await page.evaluate(() => {
+    const s = window.__sky, out = {};
+    for (const k of ['b747', 'a380', 'heavy', 'light', 'jet']) {
+      const m = new s.PlaneMesh(k, s.paintFor('BAW1', 'abc123', k)); const g = m.mesh.geometry; g.computeBoundingBox();
+      const b = g.boundingBox, pos = g.attributes.position.array; let frontTop = -1, rearTop = -1;
+      for (let i = 0; i < pos.length; i += 3) { const x = pos[i], y = pos[i + 1], z = pos[i + 2]; if (Math.abs(x) > 0.03) continue; if (z > 0.2 && z < 0.35) frontTop = Math.max(frontTop, y); if (z > -0.25 && z < -0.05) rearTop = Math.max(rearTop, y); }
+      out[k] = { frontTop: +frontTop.toFixed(3), rearTop: +rearTop.toFixed(3), front: +b.max.z.toFixed(3), len: m.len }; m.dispose && m.dispose();
+    }
+    return out;
+  });
+  ok('the 747 has a hump: its body is taller over the front than over the rear, unlike the plain four-engine jet', shp.b747.frontTop > shp.b747.rearTop + 0.01 && Math.abs(shp.heavy.frontTop - shp.heavy.rearTop) < 0.005, JSON.stringify(shp));
+  ok('the A380 has a double deck the whole length: taller than the 747 over the rear and as tall at the front', shp.a380.rearTop > shp.b747.rearTop + 0.01 && shp.a380.frontTop >= shp.b747.frontTop - 0.005, JSON.stringify(shp));
+  ok('the small plane has a propeller at its nose, ahead of where its body ends', shp.light.front > 0.5, JSON.stringify(shp.light));
+  // ---------- version 3.9: the shape follows the aircraft type even while the camera rides on that aircraft ----------
+  const ride = await page.evaluate(async () => {
+    const s = window.__sky, wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    s.setFollow('');
+    const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.mesh && q.kind !== 'light' && q.kind !== 'heli' && !q.remote);
+    if (!p) return { none: true };
+    const was = { type: p.type, category: p.category, kind: p.kind };
+    s.lockOn(p); await wait(7500);   // the glide in to a locked aircraft takes 6 seconds, so measure only once it has finished
+    const d0 = s.pose.dist;
+    p.type = 'C172'; p.category = 'A1'; p.tPaint = 0;   // the type arrives while the camera is riding on it
+    await wait(300); const soon = p.kind, d1 = s.pose.dist;
+    await wait(5000); const d2 = s.pose.dist;
+    p.type = was.type; p.category = was.category; p.tPaint = 0; await wait(300);
+    const back = p.kind; s.autoTour();
+    return { was: was.kind, soon, back, jump: +(Math.abs(d1 - d0) / d0).toFixed(3), settled: +(d2 / d0).toFixed(3) };
+  });
+  ok('a Cessna 172 gets its small-plane shape as soon as its type is known, even with the camera riding on it, and the camera eases in instead of jumping', !ride.none && ride.soon === 'light' && ride.jump < 0.08 && ride.settled < 0.85 && ride.back === ride.was, JSON.stringify(ride));
+  await page.waitForTimeout(500);
+  // ---------- version 3.9: business jets get their own shape ----------
+  const biz = await page.evaluate(() => {
+    const s = window.__sky, kinds = {};
+    for (const t of ['C25C', 'C56X', 'C680', 'C700', 'CL35', 'GLF6', 'GLEX', 'E55P', 'LJ45', 'FA7X', 'H25B', 'PC24', 'HDJT', 'C172', 'B738', 'A320', 'C17', 'E75L']) kinds[t] = s.modelFor('', t);
+    const m = new s.PlaneMesh('biz', s.paintFor('N345MG', 'a1b2c3', 'biz')), pos = m.mesh.geometry.attributes.position.array;
+    let rearHigh = 0, underWing = 0, finTop = -1, tailWide = 0;
+    for (let i = 0; i < pos.length; i += 3) {
+      const x = pos[i], y = pos[i + 1], z = pos[i + 2];
+      if (z < -0.18 && z > -0.33 && Math.abs(x) > 0.06 && Math.abs(x) < 0.11 && y > 0.01) rearHigh++;   // engine pods beside the rear of the body
+      if (z > -0.05 && z < 0.15 && Math.abs(x) > 0.1 && Math.abs(x) < 0.3 && y < -0.035) underWing++;  // anything hanging under the wings
+      if (Math.abs(x) < 0.01 && z < -0.4) finTop = Math.max(finTop, y);
+      if (y > 0.18 && z < -0.44) tailWide = Math.max(tailWide, Math.abs(x));                              // the tailplane on top of the fin
+    }
+    const out = { kinds, rearHigh, underWing, finTop: +finTop.toFixed(3), tailWide: +tailWide.toFixed(3), len: m.len }; m.dispose && m.dispose(); return out;
+  });
+  const bizTypes = ['C25C', 'C56X', 'C680', 'C700', 'CL35', 'GLF6', 'GLEX', 'E55P', 'LJ45', 'FA7X', 'H25B', 'PC24', 'HDJT'];
+  ok('Citations, Challengers, Gulfstreams, Phenoms, Learjets, Falcons, Hawkers, the PC-24 and the HondaJet are drawn as business jets; the Cessna 172, the airliners and the C-17 are not', bizTypes.every((t) => biz.kinds[t] === 'biz') && biz.kinds.C172 === 'light' && biz.kinds.B738 === 'jet' && biz.kinds.A320 === 'jet' && biz.kinds.C17 === 'heavy' && biz.kinds.E75L === 'jet', JSON.stringify(biz.kinds));
+  ok('the business jet has its engines at the back of the body, nothing under its wings, a tailplane on top of the fin, and is drawn smaller than an airliner', biz.rearHigh > 10 && biz.underWing === 0 && biz.finTop > 0.19 && biz.tailWide > 0.15 && biz.len < 1, JSON.stringify(biz));
+  // ---------- version 3.9: the caption names both ends of the trip ----------
+  const words = await page.evaluate(() => {
+    const s = window.__sky, A = { name: 'Palm Beach International', location: 'West Palm Beach', iata: 'PBI', icao: 'KPBI', lat: 26.6832, lon: -80.0956 }, B = { name: 'Hartsfield Jackson Atlanta International', location: 'Atlanta', iata: 'ATL', icao: 'KATL', lat: 33.6367, lon: -84.4281 };
+    const text = (p) => { const d = document.createElement('div'); d.innerHTML = s.routeHtml([A, B], Object.assign({ ground: false, vrate: 0 }, p)); return d.textContent.replace(/\s+/g, ' ').trim(); };
+    return { up: text({ altFt: 1575, vrate: 1800, rLat: 26.72, rLon: -80.15 }), high: text({ altFt: 31000, rLat: 30.5, rLon: -82.3 }), down: text({ altFt: 2500, vrate: -900, rLat: 33.7, rLon: -84.3 }) };
+  });
+  ok('the route line always names both ends, with Departing or Arriving in front when the aircraft is low beside one of them', words.up === 'Departing West Palm Beach PBI to Atlanta ATL' && words.high === 'West Palm Beach PBI to Atlanta ATL' && words.down === 'Arriving West Palm Beach PBI to Atlanta ATL', JSON.stringify(words));
+  // ---------- version 3.9: routes are asked of the relay first, which asks the route services from home ----------
+  const rel = await browser.newPage({ viewport: { width: 640, height: 360 } }); rel.on('pageerror', (e) => errs.push('PAGEERROR (routes through the relay): ' + e.message));
+  await rel.goto(PAGE.replace('routeApi=/mock/routeset&', '') + '&relay=/mock'); await rel.waitForTimeout(5000);
+  const viaRelay = await rel.evaluate(async () => {
+    const s = window.__sky; await fetch('/ctl/routeasks?reset=1'); s.routes.clear();
+    const ps = [...s.planes.values()].filter((q) => q.lat !== null && /^[A-Z]{2,3}\d/.test(q.callsign())).slice(0, 3);
+    const got = []; for (const p of ps) { const r = await s.getRoute(p); got.push(!!(r && r._airports && r._airports.length >= 2)); }
+    const n = await (await fetch('/ctl/routeasks')).json();
+    return { asked: ps.length, got, n };
+  });
+  ok('with a relay beside the page, routes are asked of the relay and not of the route services directly', viaRelay.asked > 0 && viaRelay.got.some(Boolean) && viaRelay.n.relay >= viaRelay.asked && viaRelay.n.direct === 0, JSON.stringify(viaRelay));
+  await rel.close(); await page.bringToFront();
   // ---------- version 3.8: satellite photos on the ground ----------
   // off by default: no photo is asked for and no credit line shows
   const satPage = await browser.newPage({ viewport: { width: 960, height: 540 } }); satPage.on('pageerror', (e) => errs.push('PAGEERROR (satellite): ' + e.message));
@@ -360,7 +482,8 @@ const { chromium } = require('playwright');
   await sim('/ctl/satsome?down=0');
   // a minute on, the missing photos are asked for again by themselves (the wait is cut short here)
   await satSome.evaluate(() => { const g = window.__sky.sat; for (const t of g.cache.values()) t.retry = 0; g.retryAt = 0.001; });
-  await satSome.waitForFunction(() => { const g = window.__sky.sat; return ![...g.cache.values()].some((t) => t.bad && g.want.has(t.k)); }, null, { timeout: 30000 }).catch(() => {});
+  // a photo asked for again stops counting as missing the moment it is asked for, so wait until the new ones have actually arrived
+  await satSome.waitForFunction((had) => { const g = window.__sky.sat; return g.loaded > had && !g.busy && !g.queue.length && ![...g.cache.values()].some((t) => t.bad && g.want.has(t.k)); }, part.loaded, { timeout: 30000 }).catch(() => {});
   const healed = await holes();
   ok('once the outage is over, the missing photos fill in on their own', healed.holes === 0 && healed.loaded > part.loaded, JSON.stringify(healed));
   await satSome.close();
