@@ -14,6 +14,11 @@ This small program runs on the receiver itself and does two jobs.
    flights at a time, because web pages are not always allowed to ask them directly either. Only each flight's callsign
    and roughly where it is (to a hundredth of a degree) are sent. A route found is kept for six hours and a flight no
    service knows for ten minutes, so the same flight is not asked about again meanwhile.
+   Since version 3.11 it also asks Planespotters.net for a photo of one aircraft, by its transponder code (and, when that
+   finds none, its registration). Only those two are sent. A photo found is kept for a day and an aircraft with none for
+   six hours, and Planespotters is asked at most about once every two seconds for everyone together. The relay hands on
+   only the photo's address, its size, the photographer's name and the address of its page on Planespotters, which the
+   page must show with the photo. The photo itself is then loaded by the viewer's browser from Planespotters.
 
 2. Front door, for sharing the page with people outside the house through a secure tunnel. Point the tunnel at this
    program (port 8099) and not at the receiver's web server. People outside can then reach exactly four things and
@@ -64,12 +69,17 @@ PLACES = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&q={0}
 # instead, a few flights at a time; that table cannot say whether a route fits where the aircraft is, so it is used only then.
 ROUTE_SERVICES = [('adsb.im', 'https://adsb.im/api/0/routeset'), ('adsb.lol', 'https://api.adsb.lol/api/0/routeset')]
 STANDING = 'https://vrs-standing-data.adsb.lol/routes/{0}/{1}.json'
+# Aircraft photos (version 3.11). No key or account is needed; each photo must be shown with its photographer's name and a
+# link to its page on Planespotters.
+PHOTOS_HEX = 'https://api.planespotters.net/pub/photos/hex/{0}'
+PHOTOS_REG = 'https://api.planespotters.net/pub/photos/reg/{0}'
 TEST = os.environ.get('SKY3D_RELAY_TEST')   # for testing only: one stand-in network at this address
 if TEST:
     NETWORKS = [('stand-in', TEST + '/v2/point/{0}/{1}/{2}', TEST + '/v2/callsign/{0}', TEST + '/v2/reg/{0}')]
     PLACES = TEST + '/search?format=jsonv2&limit=5&q={0}'
     ROUTE_SERVICES = [('stand-in', TEST + '/routeset')]
     STANDING = TEST + '/standing/{0}/{1}.json'
+    PHOTOS_HEX, PHOTOS_REG = TEST + '/photos/hex/{0}', TEST + '/photos/reg/{0}'
 
 A = re.ASCII
 POINT = re.compile(r'/v2/point/(-?[0-9]{1,2}(?:\.[0-9]{1,4})?)/(-?[0-9]{1,3}(?:\.[0-9]{1,4})?)/([0-9]{1,3})', A)
@@ -77,6 +87,9 @@ CALLSIGN = re.compile(r'/v2/callsign/([A-Za-z0-9]{2,8})', A)
 REG = re.compile(r'/v2/reg/([A-Za-z0-9-]{2,8})', A)
 ROUTE_ITEM = r'([A-Z0-9]{2,8}),(-?[0-9]{1,2}(?:\.[0-9]{1,2})?),(-?[0-9]{1,3}(?:\.[0-9]{1,2})?)'
 ROUTES = re.compile(r'/routes/(%s(?:;%s){0,9})' % (ROUTE_ITEM, ROUTE_ITEM), A)   # up to ten flights: callsign, latitude, longitude
+PHOTO = re.compile(r'/photo/([0-9a-f]{6})(?:/([A-Z0-9-]{2,10}))?', A)   # one aircraft: its transponder code, and its registration when known
+PHOTO_SRC = re.compile(r'https://[a-z0-9.-]{1,60}\.plnspttrs\.net/[A-Za-z0-9/_.-]{1,200}', A)   # where Planespotters keeps its photos
+PHOTO_PAGE = re.compile(r'https://www\.planespotters\.net/photo/[A-Za-z0-9/_.-]{1,200}', A)
 PLACE = re.compile(r"/place/([A-Za-z0-9%._~!$&'()*+,;=:@-]{1,280})", A)   # the typed words, as the page encodes them
 # What the page reads from the receiver's own web server. Nothing outside these patterns is ever fetched from it.
 AIRCRAFT = re.compile(r'/(?:tar1090/data|data|skyaware/data)/aircraft\.json', A)
@@ -110,6 +123,8 @@ PLACE_KEEP = 24 * 3600.0                   # a place found is kept this long, an
 ROUTE_RATE, ROUTE_BURST = 0.5, 10        # questions a second to the route services, for all viewers together
 ROUTE_VIEWER_RATE, ROUTE_VIEWER_BURST = 0.25, 5   # route questions one viewer may cause, half of all, so no one viewer can use up the rest
 ROUTE_KEEP, ROUTE_NONE = 6 * 3600.0, 600.0   # a route found is kept this long; a flight no service knows is not asked about again for this long
+PHOTO_RATE, PHOTO_BURST = 0.5, 4          # questions a second to Planespotters, for all viewers together
+PHOTO_KEEP, PHOTO_NONE = 24 * 3600.0, 6 * 3600.0   # a photo found is kept a day; an aircraft with none is not asked about again for six hours
 MAX_BODY = 8 * 1024 * 1024
 MAX_AT_ONCE = 48        # requests being answered at once
 MAX_CONNECTIONS = 96    # connections open at once
@@ -145,6 +160,8 @@ network_down = {}                        # when each flight network last refused
 net_bucket, look_bucket = Bucket(NET_RATE, NET_BURST), Bucket(LOOK_RATE, LOOK_BURST)
 place_bucket, place_hour = Bucket(PLACE_RATE, PLACE_BURST), Bucket(PLACE_HOURLY / 3600.0, 20)
 route_bucket = Bucket(ROUTE_RATE, ROUTE_BURST)
+photo_bucket = Bucket(PHOTO_RATE, PHOTO_BURST)
+photos_kept, photos_failed = {}, {}     # photo answers by transponder code, and codes Planespotters could not answer just now
 routes_kept = {}                         # routes by callsign: (when, the route or None)
 places_kept, places_failed = {}, {}     # place answers by the typed words, and words the place finder could not answer just now
 viewers = {}                             # allowances per viewer; held in memory only and never written down
@@ -234,6 +251,46 @@ def ask_places(text):
         kind = p.get('type') if isinstance(p.get('type'), str) else ''
         out.append({'name': ' '.join(p['display_name'].split())[:160], 'lat': round(lat, 5), 'lon': round(lon, 5), 'kind': kind[:30]})
     return True, status, json.dumps({'places': out}, separators=(',', ':'))
+
+
+def photo_of(raw):
+    """The first usable photo in a Planespotters answer, rebuilt from its address, size, photographer and page only,
+    or None when it has none. Anything that is not where Planespotters keeps its photos and pages is dropped."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    photos = data.get('photos') if isinstance(data, dict) else None
+    for ph in photos if isinstance(photos, list) else []:
+        if not isinstance(ph, dict):
+            continue
+        for size in ('thumbnail_large', 'thumbnail'):
+            t = ph.get(size)
+            if not isinstance(t, dict) or not isinstance(t.get('src'), str) or not PHOTO_SRC.fullmatch(t['src']):
+                continue
+            link, by = ph.get('link'), ph.get('photographer')
+            if not isinstance(link, str) or not PHOTO_PAGE.fullmatch(link) or not isinstance(by, str):
+                break
+            dims = t.get('size') if isinstance(t.get('size'), dict) else {}
+            w, h = dims.get('width'), dims.get('height')
+            return {'src': t['src'], 'w': w if isinstance(w, int) and 0 < w < 5000 else None, 'h': h if isinstance(h, int) and 0 < h < 5000 else None,
+                    'link': link, 'by': ' '.join(by.split())[:80]}
+    return None
+
+
+def ask_photo(hexid, reg):
+    """Ask Planespotters for a photo of one aircraft. Returns (worked, photo or None)."""
+    headers = {'Accept': 'application/json', 'User-Agent': AGENT}
+    for url in [PHOTOS_HEX.format(hexid)] + ([PHOTOS_REG.format(urllib.parse.quote(reg, safe=''))] if reg else []):
+        try:
+            with outward.open(urllib.request.Request(url, headers=headers), timeout=8) as answer:
+                raw = answer.read(512 * 1024).decode('utf-8', 'replace')
+        except Exception:   # refused, slow, or not reachable
+            return False, None
+        found = photo_of(raw)
+        if found:
+            return True, found
+    return True, None
 
 
 def airport(a):
@@ -533,6 +590,10 @@ class Relay(BaseHTTPRequestHandler):
         if m:
             status, body, extra = self.route_answer(m.group(1), routing)
             return self.reply(status, body, extra=extra)
+        m = PHOTO.fullmatch(path)
+        if m:
+            status, body, extra = self.photo_answer(m.group(1), m.group(2) or '', asking)
+            return self.reply(status, body, extra=extra)
         m = PLACE.fullmatch(path)
         if m:
             status, body, extra = self.place_answer(m.group(1), asking)
@@ -615,6 +676,9 @@ class Relay(BaseHTTPRequestHandler):
                 started = time.time()
                 got = post_routes(url, [('DAL1311', 26.7, -80.1)])
                 report['routes from ' + name] = {'answered': got is not None, 'milliseconds': int((time.time() - started) * 1000), 'knows the test flight': bool(got and route_of(got.get('DAL1311'), judged=False))}
+            started = time.time()   # and Planespotters (version 3.11), asked for a photo of one aircraft
+            worked, found = ask_photo('a0e34a', 'N557NW')
+            report['photos from Planespotters'] = {'answered': worked, 'milliseconds': int((time.time() - started) * 1000), 'found a photo': bool(found)}
             recent = json.dumps(report, indent=1)
             with lock:
                 checked[0], checked[1] = time.monotonic(), recent
@@ -666,6 +730,43 @@ class Relay(BaseHTTPRequestHandler):
         if not out:
             return 502, json.dumps({'error': 'The route services did not answer.'}), None
         return 200, json.dumps(out, separators=(',', ':')), None
+
+    def photo_answer(self, hexid, reg, asking):
+        """Returns (status, text, extra headers) for a photo of one aircraft: {"photo": {...}} or {"photo": null}."""
+        busy = (503, json.dumps({'error': 'Planespotters has been asked as often as it may for now. Try again in a moment.'}), {'Retry-After': '3'})
+        mine = lock_for('photo ' + hexid)
+        if not mine.acquire(timeout=10):
+            return busy
+        try:
+            now = time.monotonic()
+            with lock:
+                hit, bad = photos_kept.get(hexid), photos_failed.get(hexid)
+            if hit and now - hit[0] < (PHOTO_KEEP if hit[1] else PHOTO_NONE):
+                return 200, json.dumps({'photo': hit[1]}, separators=(',', ':')), None
+            if bad and now - bad < 60:
+                return 502, json.dumps({'error': 'Planespotters did not answer.'}), None
+            with lock:
+                may_ask = photo_bucket.ready() and asking.take() and photo_bucket.take()
+            if not may_ask:
+                return busy
+            worked, found = ask_photo(hexid, reg)
+            with lock:
+                now = time.monotonic()
+                if worked:
+                    if len(photos_kept) > 3000:
+                        for old in sorted(photos_kept, key=lambda k: photos_kept[k][0])[:600]:
+                            del photos_kept[old]
+                    photos_kept[hexid] = (now, found)
+                    photos_failed.pop(hexid, None)
+                else:
+                    if len(photos_failed) > 300:
+                        photos_failed.clear()
+                    photos_failed[hexid] = now
+            if worked:
+                return 200, json.dumps({'photo': found}, separators=(',', ':')), None
+            return 502, json.dumps({'error': 'Planespotters did not answer.'}), None
+        finally:
+            mine.release()
 
     def place_answer(self, encoded, asking):
         """Returns (status, text, extra headers) for one typed place. The words are the only thing sent on."""

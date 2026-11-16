@@ -78,7 +78,15 @@ const strip = (a) => { const o = Object.assign({}, a); delete o._route; delete o
 const AIRPORTS = JSON.parse(fs.readFileSync(path.join(root, 'build/airports.json'), 'utf8')); const AP = {}; for (const a of AIRPORTS) AP[a[0]] = a;
 // a 16 by 16 green PNG, made here so the simulator needs no image files
 let satAsked = 0, satSomeDown = true;
-const routeAsks = { direct: 0, relay: 0 };   // how many flights the page asked about each way, for the checks (version 3.9)
+const routeAsks = { direct: 0, relay: 0 };
+// version 3.11: a stand-in for Planespotters.net. eeeee0 has no photo; bad001 has one that points away from Planespotters and must be refused.
+const photoAsks = { hex: 0, reg: 0, relay: 0 };
+const photosFor = (key) => {
+  if (key === 'eeeee0' || key === 'N00000') return { photos: [] };
+  if (key === 'bad001') return { photos: [{ id: '1', thumbnail_large: { src: 'https://evil.example/x.jpg', size: { width: 420, height: 280 } }, link: 'https://evil.example/photo', photographer: 'Someone' }] };
+  return { photos: [{ id: '1838383', thumbnail: { src: 'https://t.plnspttrs.net/40421/1838383_ab12cd34ef_t.jpg', size: { width: 200, height: 133 } }, thumbnail_large: { src: 'https://t.plnspttrs.net/40421/1838383_ab12cd34ef_280.jpg', size: { width: 420, height: 280 } },
+    link: 'https://www.planespotters.net/photo/1838383/n12345-test-airline-boeing-737-800', photographer: 'Pat Spotter <img src=x onerror=alert(1)>' }] };
+};   // how many flights the page asked about each way, for the checks (version 3.9)
 const SAT_PNG = (() => {
   const crcT = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; crcT[n] = c >>> 0; }
   const crc = (b) => { let c = 0xffffffff; for (const x of b) c = crcT[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
@@ -177,6 +185,13 @@ http.createServer((req, res) => {
     routeAsks.relay += items.length;
     return json(items.map(routeFor), { 'Access-Control-Allow-Origin': '*' });
   }
+  if (u.pathname.startsWith('/mock/photos/hex/')) { photoAsks.hex++; return json(photosFor(u.pathname.split('/').pop()), { 'Access-Control-Allow-Origin': '*' }); }
+  if (u.pathname.startsWith('/mock/photos/reg/')) { photoAsks.reg++; return json(photosFor(decodeURIComponent(u.pathname.split('/').pop())), { 'Access-Control-Allow-Origin': '*' }); }
+  if (u.pathname.startsWith('/mock/photo/')) {   // what the relay hands the page for a photo (version 3.11)
+    photoAsks.relay++; const ph = photosFor(u.pathname.split('/')[3]).photos[0], t = ph && ph.thumbnail_large;
+    return json({ photo: ph ? { src: t.src, w: t.size.width, h: t.size.height, link: ph.link, by: ph.photographer } : null }, { 'Access-Control-Allow-Origin': '*' });
+  }
+  if (u.pathname === '/ctl/photoasks') { const out = Object.assign({}, photoAsks); if (u.searchParams.get('reset')) Object.assign(photoAsks, { hex: 0, reg: 0, relay: 0 }); return json(out); }
   if (u.pathname === '/ctl/routeasks') { const out = Object.assign({}, routeAsks); if (u.searchParams.get('reset')) { routeAsks.direct = 0; routeAsks.relay = 0; } return json(out); }
   // the route table itself, which the relay reads only when no route service answers
   const st = /^\/mock\/standing\/[A-Z0-9]{2}\/([A-Z0-9]{3,8})\.json$/.exec(u.pathname);

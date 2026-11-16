@@ -1056,6 +1056,58 @@ function updateListen() {
 }
 function openListen() { if (listenAp) window.open('https://www.liveatc.net/search/?icao=' + encodeURIComponent(listenAp[0]), '_blank', 'noopener'); }
 
+// ---------- aircraft photo (version 3.11) ----------
+// A photo of the aircraft in the caption, from Planespotters.net, shown with its photographer's name and a link to its page there,
+// as Planespotters asks. Only the aircraft's transponder code and registration are sent. The network edition asks the relay first,
+// which keeps answers for a day and asks Planespotters for everyone at once; without a relay, or when it cannot answer, the page
+// asks Planespotters itself. Either way the photo is loaded by the viewer's browser from Planespotters.
+const PHOTO_SRC = /^https:\/\/[a-z0-9.-]{1,60}\.plnspttrs\.net\/[A-Za-z0-9/_.-]{1,200}$/, PHOTO_PAGE = /^https:\/\/www\.planespotters\.net\/photo\/[A-Za-z0-9/_.-]{1,200}$/;
+const photoKept = new Map();   // by transponder code: { t, photo }
+let photoFor = null;           // the aircraft whose photo window is open
+function cleanPhoto(ph) { return ph && typeof ph.src === 'string' && PHOTO_SRC.test(ph.src) && typeof ph.link === 'string' && PHOTO_PAGE.test(ph.link) && typeof ph.by === 'string' ? { src: ph.src, link: ph.link, by: ph.by.slice(0, 80), w: ph.w, h: ph.h } : null; }
+function fromPlanespotters(data) {   // the first usable photo in Planespotters' own answer
+  for (const ph of (data && Array.isArray(data.photos) ? data.photos : [])) {
+    const t = ph && (ph.thumbnail_large || ph.thumbnail); if (!t) continue;
+    const c = cleanPhoto({ src: t.src, link: ph.link, by: ph.photographer, w: t.size && t.size.width, h: t.size && t.size.height }); if (c) return c;
+  }
+  return null;
+}
+async function findPhoto(p) {
+  const hex = (p.hex || '').toLowerCase(), reg = ((p.info && p.info.reg) || p.reg || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 10), t = nowS();
+  if (!/^[0-9a-f]{6}$/.test(hex)) return null;
+  const hit = photoKept.get(hex); if (hit && t - hit.t < (hit.photo ? 86400 : 3600)) return hit.photo;
+  let photo, known = false;
+  const rb = __NET__ && !Q.has('photoApi') ? relayBase() : '';
+  if (rb) { try { const d = await getJSON(rb + '/photo/' + hex + (reg.length >= 2 ? '/' + reg : '')); photo = cleanPhoto(d.photo); known = true; } catch (e) { /* the relay could not answer: ask Planespotters directly */ } }
+  if (!known) {
+    const base = Q.get('photoApi') || 'https://api.planespotters.net/pub/photos/';
+    photo = fromPlanespotters(await getJSON(base + 'hex/' + hex));
+    if (!photo && reg.length >= 2) photo = fromPlanespotters(await getJSON(base + 'reg/' + encodeURIComponent(reg)));
+  }
+  photoKept.set(hex, { t, photo: photo || null }); if (photoKept.size > 500) photoKept.delete(photoKept.keys().next().value);
+  return photo || null;
+}
+function openPhoto() {
+  const p = capPlane; if (!p || !capShown) return;
+  closeMine(); if (!$('find').hidden) closeFind();
+  photoFor = p; const name = $('c-flight').textContent || p.hex.toUpperCase(), what = $('c-air').textContent;
+  $('photo-title').textContent = what ? name + ', ' + what : name;
+  const img = $('photo-img'), credit = $('photo-credit'), note = $('photo-note');
+  img.hidden = true; img.removeAttribute('src'); credit.hidden = true; credit.textContent = ''; note.textContent = 'Looking for a photo on Planespotters.net...';
+  $('photo').hidden = false; $('photo-close').focus();
+  findPhoto(p).then((ph) => {
+    if (photoFor !== p || $('photo').hidden) return;
+    if (!ph) { note.textContent = 'Planespotters.net has no photo of this aircraft.'; return; }
+    note.textContent = '';
+    img.onload = () => { if (photoFor === p) img.hidden = false; }; img.onerror = () => { if (photoFor === p) note.textContent = 'The photo did not load. Planespotters.net may be busy.'; };
+    if (ph.w && ph.h) { img.width = ph.w; img.height = ph.h; }
+    img.alt = 'Photo of ' + $('photo-title').textContent; img.src = ph.src;
+    const a = document.createElement('a'); a.href = ph.link; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = 'Planespotters.net';
+    credit.append('Photo \u00a9 ' + ph.by + ', ', a); credit.hidden = false;
+  }).catch(() => { if (photoFor === p && !$('photo').hidden) note.textContent = 'Planespotters.net did not answer. Try again in a moment.'; });
+}
+function closePhoto() { const w = $('photo'); if (w.hidden) return; w.hidden = true; photoFor = null; const ae = document.activeElement; if (ae && w.contains(ae) && ae.blur) ae.blur(); }
+
 // ---------- caption ----------
 let capPlane = null, capShown = false, capRoute = null, capInfo = null;
 function hideCaption() { capShown = false; $('cap').classList.remove('on'); }
@@ -1113,6 +1165,7 @@ function updateCaption(t) {
     $('c-prog').hidden = !(shot.kind === 'follow' && leg); $('c-progtext').textContent = prog; $('c-progtext').hidden = !prog;
   }
   if (show !== capShown) { capShown = show; $('cap').classList.toggle('on', show); }
+  if ($('photobtn')._on !== show) { $('photobtn')._on = show; $('photobtn').hidden = !show; document.body.classList.toggle('hasphoto', show); }   // the Photo button shows while a caption does
   // quiet status line
   let msg = '';
   const netOn = __NET__ && S.src !== 'antenna';
@@ -1278,6 +1331,7 @@ function initPanel() {
   $('f-flyback').value = String(S.flyBack); $('f-flyback').onchange = (e) => { S.flyBack = +e.target.value; save(); };
   fillKeys(); $('help').onclick = () => toggleHelp(false); $('mine-close').onclick = () => closeMine();
   $('findbtn').onclick = () => { $('findbtn').blur(); openFind(); };
+  $('photobtn').onclick = () => { $('photobtn').blur(); openPhoto(); }; $('photo-close').onclick = () => closePhoto();
   $('find-q').oninput = () => { findSel = 0; renderFind(); };
   canvasControls();
   $('f-cap').onchange = (e) => { S.captions = e.target.checked; save(); };
@@ -1329,6 +1383,7 @@ function initPanel() {
     const tag = el && el.tagName, typing = tag === 'INPUT' && el.type !== 'checkbox';
     if (e.key === 'Escape') { e.preventDefault(); escapeKey(); return; }   // Escape closes the topmost window first, wherever the keyboard focus is
     if (el && el.id === 'find-q') { findKey(e); return; }
+    if (!$('photo').hidden) { if ((e.key === 'i' || e.key === 'I') && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); closePhoto(); } return; }   // with the photo open, only I and Escape do anything
     if (!$('mine').hidden) { if ((e.key === 'p' || e.key === 'P') && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); closeMine(); } return; }   // with My places open, only P and Escape do anything; Enter and Space work its buttons
     if (typing) { if (e.key === 'Escape') togglePanel(false); return; }
     // An arrow key with the settings open, on a checkbox or a button, closes the settings and moves the sky as usual: after ticking
@@ -1357,18 +1412,20 @@ function initPanel() {
     else if (k === '/') { e.preventDefault(); openFind(); }
     else if (k === 'p' || k === 'P') { e.preventDefault(); openMine(); }
     else if (k === 'l' || k === 'L') openListen();
+    else if (k === 'i' || k === 'I') openPhoto();
     else if (k === 't' || k === 'T') { const TR = [0, 2, 5, 10]; S.trail = TR[(TR.indexOf(S.trail) + 1) % TR.length]; save(); $('f-trail').value = String(S.trail); }
     else if (k === 'c' || k === 'C') { S.captions = !S.captions; save(); $('f-cap').checked = S.captions; }
     else if (k === 's' || k === 'S' || k === 'Enter') togglePanel();
   });
   // which keys are down right now, for moving about in fly mode
-  window.addEventListener('keydown', (e) => { const tag = document.activeElement && document.activeElement !== document.body ? document.activeElement.tagName : ''; if (tag === 'INPUT' || tag === 'SELECT' || !$('help').hidden || !$('find').hidden || !$('mine').hidden || document.body.classList.contains('panel')) return; held.add(e.key); });
+  window.addEventListener('keydown', (e) => { const tag = document.activeElement && document.activeElement !== document.body ? document.activeElement.tagName : ''; if (tag === 'INPUT' || tag === 'SELECT' || !$('help').hidden || !$('find').hidden || !$('mine').hidden || !$('photo').hidden || document.body.classList.contains('panel')) return; held.add(e.key); });
   window.addEventListener('keyup', (e) => { held.delete(e.key); });
   window.addEventListener('blur', () => held.clear());
 }
 function escapeKey() {
   const ae = document.activeElement; if (ae && ae !== document.body && ae.blur) ae.blur();   // give the keyboard back to the page, so the other keys work again
   if (!$('help').hidden) toggleHelp(false);
+  else if (!$('photo').hidden) closePhoto();
   else if (!$('find').hidden) closeFind();
   else if (!$('mine').hidden) closeMine();
   else if (document.body.classList.contains('panel')) togglePanel(false);
@@ -1381,7 +1438,7 @@ function canvasControls() {
   canvas.addEventListener('pointerdown', (e) => {
     // a click on the sky closes the settings, My places and search, and takes the keyboard back from any control, so the keys work again
     if (document.body.classList.contains('panel')) togglePanel(false);
-    closeMine(); if (!$('find').hidden) closeFind();
+    closeMine(); closePhoto(); if (!$('find').hidden) closeFind();
     const ae = document.activeElement; if (ae && ae !== document.body && ae !== canvas && ae.blur) ae.blur();
     if (e.button !== 0) return; drag = { x: e.clientX, y: e.clientY, az: 0, el: 0, moved: false }; try { canvas.setPointerCapture(e.pointerId); } catch (x) { /* fine without it */ } });
   canvas.addEventListener('pointermove', (e) => {
@@ -1420,6 +1477,7 @@ const HELP = [
   ['C', 'Captions on or off'],
   ['Shift and F', 'Fill the screen'],
   ['L', 'Listen to air traffic control near the view, on LiveATC.net'],
+  ['I', 'A photo of the aircraft in the caption, from Planespotters.net'],
   ['S', 'Open or close the settings'],
   ['H or ?', 'Show or hide this help'],
 ];
@@ -1431,7 +1489,7 @@ function fillKeys() {
 }
 function toggleHelp(on) { const h = $('help'), open = on === undefined ? h.hidden : on; h.hidden = !open; if (open) { held.clear(); closeFind(); closeMine(); document.body.classList.add('awake'); } }
 // Version 3.7.1: P opens a small window with just the viewer's places, the same list as "Center the sky on". One click moves the sky there.
-function openMine() {
+function openMine() { closePhoto();
   toggleHelp(false); closeFind(); document.body.classList.remove('panel'); held.clear(); document.body.classList.add('awake');
   renderMine(); $('mine').hidden = false;
   const first = $('mine-list').querySelector('button') || $('mine-close'); first.focus();
@@ -1454,7 +1512,7 @@ function renderMine() {
 }
 function closeMine() { const m = $('mine'); if (m.hidden) return; m.hidden = true; const ae = document.activeElement; if (ae && m.contains(ae) && ae.blur) ae.blur(); }
 let findSel = 0, findList = [], routesAsked = -1e9, findTimer = 0;
-function openFind() {
+function openFind() { closePhoto();
   toggleHelp(false); closeMine(); document.body.classList.remove('panel'); held.clear(); $('find').hidden = false; clearInterval(findTimer); findTimer = setInterval(() => { if (!$('find').hidden) renderFind(); }, 2000); $('find-q').value = ''; findSel = 0; renderFind(); $('find-q').focus();
   let n = 0; for (const p of planes.values()) if (p.lat !== null && !p.info && n++ < 40) dbLookup(p).then(() => { if (!$('find').hidden) renderFind(); }, () => {});
   prefetchRoutes().then(() => { if (!$('find').hidden) renderFind(); });

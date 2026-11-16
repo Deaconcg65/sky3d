@@ -88,6 +88,26 @@ const OUT = { 'CF-Connecting-IP': '203.0.113.7' };   // what a request looks lik
   }
   await sleep(1100);
 
+  // 3c. aircraft photos (version 3.11): only the transponder code and registration go out, the answer is cut to the photo's
+  // address, size, photographer and page, anything not on Planespotters is refused, and answers are kept
+  const photoAsked = async () => JSON.parse((await get('/ctl/photoasks', {}, SIM)).text);
+  const ph0 = await photoAsked();
+  const ph = await get('/sky-relay/photo/abc123/N12345', OUT), phj = JSON.parse(ph.text || '{}');
+  check('a photo of one aircraft is looked up and answered', ph.status === 200 && phj.photo && /^https:\/\/t\.plnspttrs\.net\//.test(phj.photo.src) && /^https:\/\/www\.planespotters\.net\/photo\//.test(phj.photo.link), 'got ' + ph.status + ' ' + ph.text.slice(0, 120));
+  check('a photo answer holds the address, size, photographer and page and nothing else', phj.photo && Object.keys(phj.photo).sort().join() === 'by,h,link,src,w' && phj.photo.w === 420, JSON.stringify(phj));
+  const phAgain = await get('/sky-relay/photo/abc123', { 'CF-Connecting-IP': '203.0.113.30' }), ph1 = await photoAsked();
+  check('the same aircraft again is answered from what was kept, for anyone', phAgain.status === 200 && ph1.hex === ph0.hex + 1, JSON.stringify(ph1));
+  await sleep(2100); const evil = JSON.parse((await get('/sky-relay/photo/bad001', OUT)).text || '{}');
+  check('a photo that points anywhere but Planespotters is not handed on', evil.photo === null, JSON.stringify(evil));
+  await sleep(2100); const noPh = await get('/sky-relay/photo/eeeee0/N00000', OUT), nonej = JSON.parse(noPh.text || '{}'), ph2 = await photoAsked();
+  check('an aircraft with no photo is asked by its registration too, and answered with none', noPh.status === 200 && nonej.photo === null && ph2.reg === ph1.reg + 1, JSON.stringify({ nonej, ph2 }));
+  for (const [bad, why] of [['ABC123', 'capital letters'], ['abc12', 'five characters'], ['abc123/n1', 'a registration of two characters with small letters'], ['abc123/' + 'N'.repeat(11), 'a registration over ten characters']]) {
+    const r = await get('/sky-relay/photo/' + bad, OUT); check('a photo question with ' + why + ' is refused', r.status === 404, 'got ' + r.status);
+  }
+  let quickPh = 0; for (const h of ['a00001', 'a00002', 'a00003', 'a00004', 'a00005', 'a00006', 'a00007']) { const r = await get('/sky-relay/photo/' + h, { 'CF-Connecting-IP': '203.0.113.' + (40 + quickPh) }); if (r.status === 503) quickPh++; }
+  check('many new aircraft at once: Planespotters is asked only as often as allowed, and the rest are told to wait', quickPh >= 2, quickPh + ' told to wait');
+  await sleep(2100);
+
   // 4. pages on other sites are refused; the page from the same address is not
   const p = '/sky-relay/v2/point/40.7/-73.8/60';
   const other = await get(p, Object.assign({ Origin: 'https://some-other-site.example' }, OUT)); check('a page on another site is refused', other.status === 403 && !other.headers['access-control-allow-origin']);
