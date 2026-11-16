@@ -320,7 +320,7 @@ const { chromium } = require('playwright');
   ok('the fly keys go away when fly mode ends', fk3.kind !== 'fly' && !fk3.keys, JSON.stringify(fk3));
   // the mouse alone: a drag takes the controls without the key box, and the small scrolls a Magic Mouse or trackpad sends while the mouse moves do not take them at all
   await page.mouse.move(420, 330);
-  for (let i = 0; i < 12; i++) { await page.mouse.wheel(0, 3); await page.mouse.move(420 + i * 9, 330 + i * 4); await page.waitForTimeout(60); }
+  for (let i = 0; i < 30; i++) { await page.mouse.wheel(0, 3); await page.mouse.move(420 + i * 4, 330 + i * 2); await page.waitForTimeout(100); }   // three seconds of touches: more than enough in all, never enough in one half second
   await page.waitForTimeout(400);
   const ms1 = await keyState();
   ok('small scroll touches while the mouse moves do not take the controls or bring up the fly keys', ms1.kind !== 'fly' && !ms1.keys, JSON.stringify(ms1));

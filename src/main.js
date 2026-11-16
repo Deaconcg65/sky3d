@@ -1478,10 +1478,14 @@ function canvasControls() {
   // A Magic Mouse or a trackpad sends small scroll events when a finger only brushes it while the mouse moves. Those used to start fly mode,
   // so the camera stopped touring whenever the mouse was moved. Now the scroll has to add up to a real turn of the wheel (WHEEL_TAKE
   // within half a second) before it takes the controls; once flying, every scroll zooms as before.
-  let wheelSum = 0, wheelT = 0;
+  const wheelRecent = [];   // [time, size] of wheel turns in the last half second, while not flying
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault(); const t = nowS(), d = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
-    if (shot.kind !== 'fly') { if (t - wheelT > 0.5) wheelSum = 0; wheelT = t; wheelSum += Math.abs(d); if (wheelSum < WHEEL_TAKE) return; wheelSum = 0; }
+    if (shot.kind !== 'fly') {   // only a real zoom takes the controls: turns that add up past WHEEL_TAKE within one half second
+      wheelRecent.push([t, Math.abs(d)]); while (wheelRecent.length && t - wheelRecent[0][0] > 0.5) wheelRecent.shift();
+      if (wheelRecent.reduce((sum, w) => sum + w[1], 0) < WHEEL_TAKE) return;
+      wheelRecent.length = 0;
+    }
     zoomFly(Math.exp(clamp(d, -200, 200) * 0.0015));
   }, { passive: false });
 }
