@@ -297,10 +297,31 @@ const { chromium } = require('playwright');
   ok('in fly mode the fly keys show in the corner', fk1.keys, JSON.stringify(fk1));
   await page.waitForTimeout(7500);
   const fk2 = await keyState();
-  ok('the fly keys stay for as long as fly mode lasts, not only the first seven seconds', fk2.kind === 'fly' && fk2.keys, JSON.stringify(fk2));
+  ok('the fly keys stay while the keys are in use, not only the first seven seconds', fk2.kind === 'fly' && fk2.keys, JSON.stringify(fk2));
+  // version 3.11: the box fades 12 seconds after the last key, though fly mode goes on (Chris: it came up with the mouse and never went away)
+  await page.waitForTimeout(5500);
+  const fk2b = await keyState();
+  ok('12 seconds after the last key the fly keys fade, while fly mode goes on', fk2b.kind === 'fly' && !fk2b.keys, JSON.stringify(fk2b));
+  await page.keyboard.press('ArrowLeft'); await page.waitForTimeout(400);
+  const fk2c = await keyState();
+  ok('the next fly key brings the fly keys back', fk2c.kind === 'fly' && fk2c.keys, JSON.stringify(fk2c));
   await page.keyboard.press('Escape'); await page.waitForTimeout(600);
   const fk3 = await keyState();
   ok('the fly keys go away when fly mode ends', fk3.kind !== 'fly' && !fk3.keys, JSON.stringify(fk3));
+  // the mouse alone: a drag takes the controls without the key box, and the small scrolls a Magic Mouse or trackpad sends while the mouse moves do not take them at all
+  await page.mouse.move(420, 330);
+  for (let i = 0; i < 12; i++) { await page.mouse.wheel(0, 3); await page.mouse.move(420 + i * 9, 330 + i * 4); await page.waitForTimeout(60); }
+  await page.waitForTimeout(400);
+  const ms1 = await keyState();
+  ok('small scroll touches while the mouse moves do not take the controls or bring up the fly keys', ms1.kind !== 'fly' && !ms1.keys, JSON.stringify(ms1));
+  await page.mouse.wheel(0, 120); await page.waitForTimeout(400);
+  const ms2 = await keyState();
+  ok('a real turn of the mouse wheel still zooms by taking the controls, without the fly keys', ms2.kind === 'fly' && !ms2.keys, JSON.stringify(ms2));
+  await page.keyboard.press('Escape'); await page.waitForTimeout(600);
+  await page.mouse.move(400, 320); await page.mouse.down(); await page.mouse.move(470, 340, { steps: 6 }); await page.mouse.up(); await page.waitForTimeout(400);
+  const ms3 = await keyState();
+  ok('a drag takes the controls without bringing up the fly keys', ms3.kind === 'fly' && !ms3.keys, JSON.stringify(ms3));
+  await page.keyboard.press('Escape'); await page.waitForTimeout(600);
   await page.keyboard.press('s'); await page.waitForTimeout(400); await page.focus('#f-cap'); await page.evaluate(() => document.body.classList.remove('panel'));
   await page.keyboard.press('ArrowUp'); await page.waitForTimeout(400);
   const fk4 = await keyState();

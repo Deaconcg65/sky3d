@@ -837,7 +837,7 @@ let shot = newShot('wide'), prevShot = null;
 shot.az0 = 200;
 let paused = false; const recent = [];
 // Version 3.6: taking the controls. In fly mode the camera is wherever the viewer puts it; fly.last is when they last touched it.
-const fly = { lat: 0, lon: 0, alt: 0, az: 200, el: 25, dist: 100, last: 0, since: 0 };
+const fly = { lat: 0, lon: 0, alt: 0, az: 200, el: 25, dist: 100, last: 0, since: 0, keysAt: -1e9 };
 const held = new Set();                 // keys held down right now
 let clicked = null, clickUntil = 0;     // an aircraft the viewer clicked, and when its details go away again
 const hold = () => paused || nowS() < clickUntil;
@@ -884,7 +884,7 @@ function flyStep(dt) {
   if (shot.kind !== 'fly') return;
   const mv = (held.has('ArrowUp') ? 1 : 0) - (held.has('ArrowDown') ? 1 : 0), turn = (held.has('ArrowRight') ? 1 : 0) - (held.has('ArrowLeft') ? 1 : 0);
   if (!mv && !turn) return;
-  fly.last = nowS();
+  fly.last = fly.keysAt = nowS();
   const scale = Math.max(fly.dist, 2);   // the farther out the camera is, the faster it moves
   if (turn) fly.az -= turn * 50 * dt;   // the camera faces the compass heading of minus its orbit angle, so turning right lowers the angle
   if (mv) {
@@ -892,6 +892,7 @@ function flyStep(dt) {
     else { const a = -fly.az * D2R, d = mv * scale * 0.08 * dt; fly.lat += (d * Math.cos(a)) / 111.19; fly.lon += (d * Math.sin(a)) / (111.19 * Math.cos(fly.lat * D2R)); }
   }
 }
+const FLY_KEYS_SECS = 12, WHEEL_TAKE = 60;
 function zoomFly(f) { enterFly(); fly.dist = clamp(fly.dist * f, 0.15, 700); fly.last = nowS(); }
 const PV = new THREE.Vector3();
 // the aircraft nearest to a point on the screen, if one is close enough to mean it
@@ -1124,7 +1125,9 @@ function updateCaption(t) {
   else if (shot.lock && t - shot.t0 < 9) msg = 'Staying with this aircraft. Press A for the auto tour, or Escape.';
   else if (shot.kind === 'fly' && t - fly.since < 7) msg = 'You have the controls. Drag to look around, arrow keys to move, plus and minus to zoom, A for the auto tour.';
   else if (t - bootT < 14 && shot.kind === 'wide') msg = 'Press H to see what the keys do.';
-  const flying = shot.kind === 'fly'; if ($('flykeys')._on !== flying) { $('flykeys')._on = flying; $('flykeys').classList.toggle('on', flying); }   // the fly keys stay in the corner for as long as fly mode lasts
+  // The fly keys show while the keys are in use and fade 12 seconds after the last one (version 3.11). In 3.8.1 they stayed for all of
+  // fly mode, and a drag or a scroll with the mouse also starts fly mode, so a viewer using only the mouse had the box up for good.
+  const keysOn = shot.kind === 'fly' && t - (fly.keysAt || -1e9) < FLY_KEYS_SECS; if ($('flykeys')._on !== keysOn) { $('flykeys')._on = keysOn; $('flykeys').classList.toggle('on', keysOn); }
   if ($('msg')._t !== msg) { $('msg')._t = msg; if (msg) $('msg').textContent = msg; $('msg').classList.toggle('on', !!msg); }
 }
 
@@ -1346,11 +1349,11 @@ function initPanel() {
     else if (k === 'n' || (k === 'ArrowRight' && !flying)) nextAircraft();
     else if (k === 'a' || k === 'A') autoTour();
     else if (k === 'w' || k === 'W') { clickUntil = 0; paused = false; if (!followOwns() || flying || shot.lock) goWide(); }
-    else if (k === 'f') enterFly();
+    else if (k === 'f') { enterFly(); fly.keysAt = nowS(); }
     else if (k === 'F') { if (document.fullscreenElement) document.exitFullscreen(); else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {}); }
-    else if (k === '+' || k === '=') zoomFly(0.8);
-    else if (k === '-' || k === '_') zoomFly(1.25);
-    else if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || (k === 'ArrowRight' && flying)) { e.preventDefault(); enterFly(); }
+    else if (k === '+' || k === '=') { zoomFly(0.8); fly.keysAt = nowS(); }
+    else if (k === '-' || k === '_') { zoomFly(1.25); fly.keysAt = nowS(); }
+    else if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || (k === 'ArrowRight' && flying)) { e.preventDefault(); enterFly(); fly.keysAt = nowS(); }
     else if (k === '/') { e.preventDefault(); openFind(); }
     else if (k === 'p' || k === 'P') { e.preventDefault(); openMine(); }
     else if (k === 'l' || k === 'L') openListen();
@@ -1389,7 +1392,15 @@ function canvasControls() {
   const end = (e) => { if (!drag) return; const d = drag; drag = null; if (!d.moved && e.type === 'pointerup') clickAt(e.clientX, e.clientY); };
   canvas.addEventListener('pointerup', end); canvas.addEventListener('pointercancel', end);
   canvas.addEventListener('dblclick', (e) => { const p = planeAt(e.clientX, e.clientY); if (p) lockOn(p); });
-  canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoomFly(Math.exp(clamp(e.deltaY, -200, 200) * 0.0015)); }, { passive: false });
+  // A Magic Mouse or a trackpad sends small scroll events when a finger only brushes it while the mouse moves. Those used to start fly mode,
+  // so the camera stopped touring whenever the mouse was moved. Now the scroll has to add up to a real turn of the wheel (WHEEL_TAKE
+  // within half a second) before it takes the controls; once flying, every scroll zooms as before.
+  let wheelSum = 0, wheelT = 0;
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault(); const t = nowS(), d = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+    if (shot.kind !== 'fly') { if (t - wheelT > 0.5) wheelSum = 0; wheelT = t; wheelSum += Math.abs(d); if (wheelSum < WHEEL_TAKE) return; wheelSum = 0; }
+    zoomFly(Math.exp(clamp(d, -200, 200) * 0.0015));
+  }, { passive: false });
 }
 // ---------- help and search ----------
 const HELP = [
