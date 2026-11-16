@@ -106,6 +106,11 @@ const OUT = { 'CF-Connecting-IP': '203.0.113.7' };   // what a request looks lik
   }
   let quickPh = 0; for (const h of ['a00001', 'a00002', 'a00003', 'a00004', 'a00005', 'a00006', 'a00007']) { const r = await get('/sky-relay/photo/' + h, { 'CF-Connecting-IP': '203.0.113.' + (40 + quickPh) }); if (r.status === 503) quickPh++; }
   check('many new aircraft at once: Planespotters is asked only as often as allowed, and the rest are told to wait', quickPh >= 2, quickPh + ' told to wait');
+  // an aircraft with no photo by its hex code is asked about a second time by its registration: that second question counts against the same allowance
+  await sleep(8500); const ph3 = await photoAsked();
+  for (let i = 1; i <= 6; i++) await get('/sky-relay/photo/eeee0' + i + '/N0000' + i, { 'CF-Connecting-IP': '203.0.113.' + (60 + i) });
+  const ph4 = await photoAsked(), phSent = ph4.hex + ph4.reg - ph3.hex - ph3.reg;
+  check('aircraft with no photo by hex code: the questions by registration count against the same allowance', phSent <= 5, phSent + ' questions to Planespotters for 6 aircraft, allowance 4 at once');
   await sleep(2100);
 
   // 4. pages on other sites are refused; the page from the same address is not

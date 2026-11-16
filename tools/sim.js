@@ -82,7 +82,7 @@ const routeAsks = { direct: 0, relay: 0 };
 // version 3.11: a stand-in for Planespotters.net. eeeee0 has no photo; bad001 has one that points away from Planespotters and must be refused.
 const photoAsks = { hex: 0, reg: 0, relay: 0 };
 const photosFor = (key) => {
-  if (key === 'eeeee0' || key === 'N00000') return { photos: [] };
+  if (/^eeee/.test(key) || /^N0000/.test(key)) return { photos: [] };   // aircraft with no photo, by hex or registration
   if (key === 'bad001') return { photos: [{ id: '1', thumbnail_large: { src: 'https://evil.example/x.jpg', size: { width: 420, height: 280 } }, link: 'https://evil.example/photo', photographer: 'Someone' }] };
   return { photos: [{ id: '1838383', thumbnail: { src: 'https://t.plnspttrs.net/40421/1838383_ab12cd34ef_t.jpg', size: { width: 200, height: 133 } }, thumbnail_large: { src: 'https://t.plnspttrs.net/40421/1838383_ab12cd34ef_280.jpg', size: { width: 420, height: 280 } },
     link: 'https://www.planespotters.net/photo/1838383/n12345-test-airline-boeing-737-800', photographer: 'Pat Spotter <img src=x onerror=alert(1)>' }] };

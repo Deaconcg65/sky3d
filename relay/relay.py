@@ -278,10 +278,13 @@ def photo_of(raw):
     return None
 
 
-def ask_photo(hexid, reg):
-    """Ask Planespotters for a photo of one aircraft. Returns (worked, photo or None)."""
+def ask_photo(hexid, reg, may_ask_again=lambda: True):
+    """Ask Planespotters for a photo of one aircraft. Returns (worked, photo or None); worked is None when the question by
+    registration, which comes after the one by hex code, is not allowed yet by the shared allowance."""
     headers = {'Accept': 'application/json', 'User-Agent': AGENT}
-    for url in [PHOTOS_HEX.format(hexid)] + ([PHOTOS_REG.format(urllib.parse.quote(reg, safe=''))] if reg else []):
+    for n, url in enumerate([PHOTOS_HEX.format(hexid)] + ([PHOTOS_REG.format(urllib.parse.quote(reg, safe=''))] if reg else [])):
+        if n and not may_ask_again():   # every question sent counts against the allowance, the second one too
+            return None, None
         try:
             with outward.open(urllib.request.Request(url, headers=headers), timeout=8) as answer:
                 raw = answer.read(512 * 1024).decode('utf-8', 'replace')
@@ -749,7 +752,12 @@ class Relay(BaseHTTPRequestHandler):
                 may_ask = photo_bucket.ready() and asking.take() and photo_bucket.take()
             if not may_ask:
                 return busy
-            worked, found = ask_photo(hexid, reg)
+            def again():
+                with lock:
+                    return photo_bucket.take()
+            worked, found = ask_photo(hexid, reg, again)
+            if worked is None:
+                return busy
             with lock:
                 now = time.monotonic()
                 if worked:
