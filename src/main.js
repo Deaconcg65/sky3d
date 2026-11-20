@@ -441,7 +441,11 @@ function ingest(list, serverNow, kind = 0) {
     }
     // names and types are welcome from anywhere, even for an aircraft the antenna is tracking
     if (ac.flight) p.flight = ac.flight; if (ac.category) p.category = ac.category;
-    if (ac.dbFlags != null && ac.dbFlags !== '') p.mil = (+ac.dbFlags & 1) === 1;   // version 3.12: the records mark military aircraft
+    // version 3.12: the records mark military aircraft. readsb writes dbFlags only when it is not zero, and the type (t) comes from
+    // the same database record, so an aircraft with a type and no dbFlags is known not to be military. One with neither is looked up
+    // in the receiver's own tables (dbLookup), which also reads the military mark.
+    if (ac.dbFlags != null && ac.dbFlags !== '') p.mil = (+ac.dbFlags & 1) === 1;
+    else if (p.mil == null && ac.t) p.mil = false;
     if (ac.t) p.type = ac.t; if (ac.r) p.reg = ac.r; if (ac.desc) p.desc = ac.desc;
     if (remote && !p.remote && p.fresh(t)) continue;         // the antenna's own data wins while it has the aircraft
     if (area && p.src === 'ant' && t - p.tPos < 6) continue;   // the same rule for the flight network: it only fills in what the antenna is not hearing

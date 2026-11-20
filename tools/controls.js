@@ -471,7 +471,13 @@ const { chromium } = require('playwright');
   ok('the helicopter stands on skids and has a rotor on its tail', s311.heli.skid > 20 && s311.heli.tailRotor, JSON.stringify(s311.heli));
   // ---------- version 3.12: the aircraft gallery, military paint and fun paint ----------
   await page.keyboard.press('Escape'); await page.mouse.move(400, 300); await page.keyboard.press('g');
-  await page.waitForFunction(() => { const g = window.__sky.gallery; return g && g.isOpen && g.cards.length && g.cards.every((c) => c.drawn); }, null, { timeout: 20000 }).catch(() => {});
+  // the gallery draws only the cards on screen, so bring each one into view and wait for its picture before checking them all
+  await page.waitForFunction(() => { const g = window.__sky.gallery; return g && g.isOpen && g.cards.length; }, null, { timeout: 10000 }).catch(() => {});
+  const galN = await page.evaluate(() => (window.__sky.gallery ? window.__sky.gallery.cards.length : 0));
+  for (let i = 0; i < galN; i++) {
+    await page.evaluate((k) => window.__sky.gallery.cards[k].el.scrollIntoView({ block: 'center' }), i);
+    await page.waitForFunction((k) => window.__sky.gallery.cards[k].drawn, i, { timeout: 5000 }).catch(() => {});
+  }
   const gal = await page.evaluate(() => {
     const s = window.__sky, g = s.gallery, kinds = g.cards.map((c) => c.kind), want = Object.keys(s.MODELS).concat('heavy2');
     const lit = (cv) => { const x = cv.getContext('2d'), d = x.getImageData(0, 0, cv.width, cv.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++; return n; };
