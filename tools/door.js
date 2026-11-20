@@ -19,7 +19,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const raw = (text) => new Promise((done) => { let got = ''; const c = net.connect(PORT, '127.0.0.1', () => c.write(text)); c.on('data', (d) => got += d); c.on('close', () => done(got)); c.on('error', () => done(got)); setTimeout(() => c.destroy(), 4000); });
 const lanAddress = () => { for (const list of Object.values(os.networkInterfaces())) for (const a of list) if (a.family === 'IPv4' && !a.internal) return a.address; return null; };
 const getFrom = (host, path, headers = {}) => new Promise((done) => { const req = http.request({ host, port: PORT, path, headers }, (res) => { let t = ''; res.on('data', (c) => t += c); res.on('end', () => done({ status: res.statusCode, text: t })); }); req.on('error', (e) => done({ status: 0, text: String(e) })); req.end(); });
-const FACTS = ['hex', 'type', 'flight', 'r', 't', 'desc', 'category', 'alt_baro', 'alt_geom', 'gs', 'tas', 'track', 'true_heading', 'baro_rate', 'geom_rate', 'lat', 'lon', 'seen', 'seen_pos', 'squawk', 'emergency'];
+const FACTS = ['hex', 'type', 'flight', 'r', 't', 'desc', 'category', 'dbFlags', 'alt_baro', 'alt_geom', 'gs', 'tas', 'track', 'true_heading', 'baro_rate', 'geom_rate', 'lat', 'lon', 'seen', 'seen_pos', 'squawk', 'emergency'];
 let failed = 0;
 const check = (label, ok, detail) => { if (!ok) failed++; console.log((ok ? 'ok    ' : 'FAIL  ') + label + (detail ? '   ' + detail : '')); };
 const OUT = { 'CF-Connecting-IP': '203.0.113.7' };   // what a request looks like when it arrives through the tunnel from outside
@@ -67,6 +67,8 @@ const OUT = { 'CF-Connecting-IP': '203.0.113.7' };   // what a request looks lik
   const chunk = JSON.parse((await get('/tar1090/chunks/chunk_1.gz', OUT)).text); check('history comes through, cut to position and height', Array.isArray(chunk.files) && chunk.files.length > 0 && chunk.files.every((f) => f.aircraft.every((a) => Array.isArray(a) && a.length <= 7)) && typeof chunk.files[0].aircraft[0][4] === 'number');
   const netAns = JSON.parse((await get('/sky-relay/v2/point/40.7/-73.8/60', OUT)).text), netExtras = [...new Set(netAns.ac.flatMap((a) => Object.keys(a)))].filter((k) => !FACTS.includes(k));
   check('flight network answers are cut to the same listed facts', netAns.ac.length > 0 && netExtras.length === 0, netExtras.join(' '));
+  const flagged = netAns.ac.filter((a) => 'dbFlags' in a);
+  check('of the record flags, only the military mark comes through', flagged.length > 0 && flagged.every((a) => a.dbFlags === 0 || a.dbFlags === 1) && flagged.some((a) => a.dbFlags === 1), JSON.stringify(flagged.map((a) => a.dbFlags)));
   const redir = await get('/sky-relay/v2/callsign/REDIR', OUT);
   check('a flight network cannot point the relay back at the receiver', redir.status === 502 && !/rssi|r_dst|hex/.test(redir.text), 'got ' + redir.status);
 

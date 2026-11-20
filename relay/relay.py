@@ -104,7 +104,7 @@ HOST = re.compile(r'([a-z0-9.-]{1,253}|\[[0-9a-f:.]{2,45}\])(?::[0-9]{1,5})?', A
 # where it is, how high, how fast and which way. A receiver also records how far each aircraft is from the antenna, in
 # which direction, how strong its signal is, and a rough position guessed from the antenna's own. None of those are
 # in this list, so none of them can leave the house.
-AIRCRAFT_FACTS = ('hex', 'type', 'flight', 'r', 't', 'desc', 'category', 'alt_baro', 'alt_geom', 'gs', 'tas', 'track', 'true_heading',
+AIRCRAFT_FACTS = ('hex', 'type', 'flight', 'r', 't', 'desc', 'category', 'dbFlags', 'alt_baro', 'alt_geom', 'gs', 'tas', 'track', 'true_heading',
                   'baro_rate', 'geom_rate', 'lat', 'lon', 'seen', 'seen_pos', 'squawk', 'emergency')
 RECEIVER_FACTS = ('version', 'refresh', 'history')
 VERSION_FACTS = ('databaseVersion', 'tar1090Version')
@@ -183,8 +183,20 @@ def lock_for(key):
 
 
 def facts(aircraft):
-    """Keep only the listed facts about each aircraft."""
-    return [{k: a[k] for k in AIRCRAFT_FACTS if k in a and isinstance(a[k], (str, int, float))} for a in aircraft if isinstance(a, dict)]
+    """Keep only the listed facts about each aircraft. Of the record flags (dbFlags) only the military mark is passed on
+    (version 3.12, for the military paint); the others, such as an owner's request for privacy, are dropped."""
+    out = []
+    for a in aircraft:
+        if not isinstance(a, dict):
+            continue
+        f = {k: a[k] for k in AIRCRAFT_FACTS if k in a and isinstance(a[k], (str, int, float))}
+        if 'dbFlags' in f:
+            try:
+                f['dbFlags'] = int(f['dbFlags']) & 1
+            except (TypeError, ValueError, OverflowError):
+                del f['dbFlags']
+        out.append(f)
+    return out
 
 
 def ask(address):

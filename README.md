@@ -115,7 +115,7 @@ The relay answers the 3D sky page that came from the same address and refuses pa
 To let people outside your home network watch, with your antenna in the picture, run a secure tunnel on the receiver and point it at the relay, `http://localhost:8099`, not at the receiver's web server on port 80. It was written with Cloudflare Tunnel in mind. The relay is built to be the only thing an outside address reaches. Through it, an outsider can open:
 
 - the 3D sky page, at `/sky/`. The bare address forwards there.
-- your antenna's aircraft list and the last few minutes of history, cut down to the few facts the page draws: which aircraft, where, how high, how fast and which way. Everything else is left behind, including every clue to where the antenna stands: the receiver's own position, each aircraft's distance and direction from the antenna, signal strength, and the rough positions a receiver guesses from its own.
+- your antenna's aircraft list and the last few minutes of history, cut down to the few facts the page draws: which aircraft, where, how high, how fast and which way, plus only the military mark from each aircraft's record flags (for the military paint; other flags, such as an owner's privacy request, are dropped). Everything else is left behind, including every clue to where the antenna stands: the receiver's own position, each aircraft's distance and direction from the antenna, signal strength, and the rough positions a receiver guesses from its own.
 - the aircraft type tables the page reads.
 - the relay itself, under `/sky-relay`.
 

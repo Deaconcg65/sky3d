@@ -118,15 +118,35 @@ export function partnerOf(cs, leg) {
   return { some: true };
 }
 const GA = [0xb5202e, 0x1f4e8c, 0x7a1f2b, 0x1f6a4c, 0x1c1c1c, 0xc46a1b];   // small private aircraft: white with one trim colour
+// Version 3.12: military aircraft, known from the receiver's and the flight networks' own records (dbFlags), wear the plain grey most
+// US military transports, tankers and patrol aircraft carry; military helicopters wear the Army's olive drab. Colours only, no markings.
+export const MILITARY = { top: 0x6e757b, belly: 0x6e757b, eng: 0x5f666c, wing: 0x666d73, tip: 0x6e757b, tail: 0x666d73 };
+export const MILITARY_HELI = { top: 0x4b5320, belly: 0x434a1d, eng: 0x3d431a, wing: 0x4b5320, tip: 0x4b5320, tail: 0x434a1d };
+// Version 3.12: fun paint, for aircraft with no airline or military paint only, chosen in the settings or the gallery. Plain is the
+// default; real paint is never replaced.
+export const FUN = {
+  rainbow: { name: 'Rainbow', top: 0xe53935, stripe: 0xfb8c00, belly: 0xfdd835, aft: 0x43a047, wing: 0x1e88e5, eng: 0x8e24aa, tip: 0xfdd835, tail: [0xe53935, 0x43a047, 0x1e88e5] },
+  bee: { name: 'Bumblebee', top: 0xffc400, belly: 0x1c1c1c, stripe: 0x1c1c1c, aft: 0xffc400, wing: 0x1c1c1c, eng: 0x1c1c1c, tip: 0xffc400, tail: [0x1c1c1c, 0xffc400, 0x1c1c1c] },
+  flamingo: { name: 'Flamingo', top: 0xff7eb6, belly: 0xffc1dc, stripe: 0xff4f9a, aft: 0xff7eb6, wing: 0xffc1dc, eng: 0xff4f9a, tip: 0xff4f9a, tail: [0xff4f9a, 0xff7eb6, 0xffc1dc] },
+  stars: { name: 'Stars and stripes', belly: 0x1f3a93, stripe: 0xc8102e, eng: 0x1f3a93, tip: 0xc8102e, tail: [0xc8102e, 0xf4f5f5, 0x1f3a93] },
+  candy: { name: 'Candy', top: 0xfff0f6, stripe: 0xff6fa8, belly: 0x9ff0d0, aft: 0xb8f2ff, eng: 0xff6fa8, tip: 0x9ff0d0, tail: [0xff6fa8, 0x9ff0d0, 0xb8f2ff] },
+  midnight: { name: 'Midnight neon', top: 0x15171c, belly: 0x15171c, stripe: 0x39ff14, aft: 0x15171c, wing: 0x2a2d35, eng: 0x15171c, tip: 0x39ff14, tail: [0x15171c, 0x00e5ff, 0xff2bd6] },
+};
+export const FUN_KEYS = Object.keys(FUN);
+const hashOf = (s) => { let h = 0; for (const c of s || '') h = (h * 31 + c.charCodeAt(0)) >>> 0; return h; };
 
 // The list of colours for one aircraft, in the order of ZONES in scene.js.
-export function paintFor(callsign, hexId, kind) {
+// opts (version 3.12): mil, true for a military aircraft; fun, the fun paint for aircraft with no airline paint ('' for plain, 'random' for
+// one picked per aircraft). Airline paint comes first, then military, then the fun paint, then the plain paint of before.
+export function paintFor(callsign, hexId, kind, opts = {}) {
   const cs = (callsign || '').trim(), key = /^[A-Z]{3}\d/.test(cs) ? cs.slice(0, 3) : '';
   let r = LIVERY[PAINT_AS[key] || key];
   if (!r) {
-    const al = key && AIRLINES[key];
+    const al = key && AIRLINES[key], fun = opts.fun === 'random' ? FUN_KEYS[hashOf(hexId) % FUN_KEYS.length] : opts.fun;
     if (al) r = { tail: al[2], eng: al[2] };                                   // an airline we know only by one colour
-    else if (kind === 'light' || kind === 'heli' || kind === 'kingair') { let h = 0; for (const c of hexId || '') h = (h * 31 + c.charCodeAt(0)) >>> 0; const c = GA[h % GA.length]; r = { stripe: c, tail: c, tip: c }; }
+    else if (opts.mil) r = kind === 'heli' ? MILITARY_HELI : MILITARY;
+    else if (fun && FUN[fun]) r = FUN[fun];
+    else if (kind === 'light' || kind === 'heli' || kind === 'kingair') { const c = GA[hashOf(hexId) % GA.length]; r = { stripe: c, tail: c, tip: c }; }
     else r = { tail: 0x8fa3b8, eng: 0xdfe2e6 };                                // unknown: plain white with a grey tail
   }
   const top = r.top != null ? r.top : W, tail = Array.isArray(r.tail) ? r.tail : [r.tail != null ? r.tail : top, r.tail != null ? r.tail : top, r.tail != null ? r.tail : top];

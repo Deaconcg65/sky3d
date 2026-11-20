@@ -1,8 +1,9 @@
 // 3D sky channel. One page that reads the aircraft list from a readsb or dump1090 receiver and flies a camera through it.
 import * as THREE from 'three';
 import { R_EARTH, FT, KT, MI, D2R, clamp, lerp, smooth, angDiff, lerpAng, gcDist, bearing, sunPosition, sunTimes, fmtInt, prettyType } from './util.js';
-import { VEX, proj, setOrigin, project, localFrame, Segments, Ground, Sky, WeatherLayer, PlaneMesh, modelFor, makeLabel, SatGround } from './scene.js';
-import { AIRLINES, IATA2ICAO, paintFor, partnerOf } from './airlines.js';
+import { VEX, proj, setOrigin, project, localFrame, Segments, Ground, Sky, WeatherLayer, PlaneMesh, modelFor, makeLabel, SatGround, MODELS } from './scene.js';
+import { AIRLINES, IATA2ICAO, paintFor, partnerOf, FUN } from './airlines.js';
+import { Gallery } from './gallery.js';
 
 const Q = new URLSearchParams(location.search);
 // __NET__ is set when the page is built: true in the network edition, false in the home edition.
@@ -19,7 +20,7 @@ const PRESETS = [
 ];
 if (__NET__) PRESETS.push(['KBOS', 'Boston'], ['KMKE', 'Milwaukee'], ['KPHL', 'Philadelphia'], ['KDCA', 'Washington National'], ['KATL', 'Atlanta'], ['KMIA', 'Miami'], ['KORD', 'Chicago O\'Hare'], ['KDFW', 'Dallas Fort Worth'],
   ['KDEN', 'Denver'], ['KLAX', 'Los Angeles'], ['KSFO', 'San Francisco'], ['KSEA', 'Seattle']);
-const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr', src: 'blend', relay: '', netmax: 130, clickSecs: 15, flyBack: 30, places: [], keep: null, watch: null, watchSound: true, watchNote: false, sat: false };
+const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr', src: 'blend', relay: '', netmax: 130, clickSecs: 15, flyBack: 30, places: [], keep: null, watch: null, watchSound: true, watchNote: false, sat: false, fun: '' };
 // SHARED: the page was opened at a secure web address, which is how a receiver is shared with people outside the house.
 // At home it is opened at the receiver's own plain address.
 const SHARED = Q.has('shared') ? Q.get('shared') !== '0' : location.protocol === 'https:';
@@ -27,6 +28,7 @@ const ANT = SHARED ? "this site's antenna" : 'your antenna';
 const S = Object.assign({}, DEFAULTS);
 try { Object.assign(S, JSON.parse(localStorage.getItem('sky3d') || '{}')); } catch (e) { /* storage unavailable */ }
 for (const k of Object.keys(DEFAULTS)) if (Q.has(k) && typeof DEFAULTS[k] !== 'object') { const v = Q.get(k); S[k] = typeof DEFAULTS[k] === 'number' ? +v : typeof DEFAULTS[k] === 'boolean' ? v !== '0' && v !== 'false' : v; }
+if (typeof S.fun !== 'string' || (S.fun && S.fun !== 'random' && !FUN[S.fun])) S.fun = '';   // version 3.12: fun paint, plain unless chosen
 // The viewer's own places ("My House" and so on). They live in this browser and nowhere else: they are never sent to the
 // receiver or saved on it. On a shared address they are not even kept in the browser unless the viewer asks for that, so
 // nothing is left behind on a borrowed or public computer. Without "keep", they last until the page is closed.
@@ -363,6 +365,11 @@ class Plane {
 
 const ARR3 = [0, 0, 0], P_F = new THREE.Vector3(), P_C = new THREE.Vector3();
 const P_E = new THREE.Vector3(), P_N = new THREE.Vector3(), P_U = new THREE.Vector3(), P_Nn = new THREE.Vector3(), P_M = new THREE.Matrix4(), P_Q = new THREE.Quaternion(), P_QL = new THREE.Quaternion(), P_EU = new THREE.Euler();
+// Version 3.12: the paint of one aircraft also depends on whether its records mark it military and on the viewer's fun paint,
+// so a change to either repaints it like a new callsign does.
+const paintOf = (p, kind) => paintFor(p.callsign(), p.hex, kind, { mil: !!p.mil, fun: S.fun });
+const paintKey = (p, kind) => p.callsign() + '|' + kind + '|' + (p.mil ? 'm' : '') + '|' + S.fun;
+function repaintAll() { for (const p of planes.values()) p.tPaint = 0; }
 function updatePlane(p, t, dt, night) {
   const target = p.fresh(t) ? 1 : 0;
   p.opacity = clamp(p.opacity + (target - p.opacity > 0 ? dt / 2.5 : -dt / 3.5), 0, 1);
@@ -383,15 +390,15 @@ function updatePlane(p, t, dt, night) {
   project(p.rLat, p.rLon, p.rAlt, p.pos);
   if (!p.mesh) {
     const kind = modelFor(p.category, p.type);
-    p.mesh = new PlaneMesh(kind, paintFor(p.callsign(), p.hex, kind)); p.kind = kind; p.paintKey = p.callsign() + '|' + kind; planeLayer.add(p.mesh.group);
-  } else if (p.paintKey !== p.callsign() + '|' + modelFor(p.category, p.type) && t - (p.tPaint || 0) > 5) {
+    p.mesh = new PlaneMesh(kind, paintOf(p, kind)); p.kind = kind; p.paintKey = paintKey(p, kind); planeLayer.add(p.mesh.group);
+  } else if (p.paintKey !== paintKey(p, modelFor(p.category, p.type)) && t - (p.tPaint || 0) > 5) {
     // the callsign or the aircraft type often arrives a few seconds after the first position, so repaint once it is known.
     // The new shape goes on at once, even with the camera riding on this aircraft (version 3.9): the camera's distance
     // follows the new size slowly (camLen below), so the view never jumps.
     p.tPaint = t; const kind = modelFor(p.category, p.type);
-    if (kind !== p.kind) { planeLayer.remove(p.mesh.group); p.mesh.dispose(); p.mesh = new PlaneMesh(kind, paintFor(p.callsign(), p.hex, kind)); p.kind = kind; planeLayer.add(p.mesh.group); }
-    else { const c = paintFor(p.callsign(), p.hex, kind); p.mesh.paint.forEach((col, i) => col.set(c[i])); }
-    p.paintKey = p.callsign() + '|' + p.kind;
+    if (kind !== p.kind) { planeLayer.remove(p.mesh.group); p.mesh.dispose(); p.mesh = new PlaneMesh(kind, paintOf(p, kind)); p.kind = kind; planeLayer.add(p.mesh.group); }
+    else { const c = paintOf(p, kind); p.mesh.paint.forEach((col, i) => col.set(c[i])); }
+    p.paintKey = paintKey(p, p.kind);
   }
   // An aircraft heard without its type: look it up in the receiver's tables, so it has its own shape before the camera comes to it.
   // This is checked every frame, not only when the shape is first made, because the tables may still be loading when the
@@ -434,6 +441,11 @@ function ingest(list, serverNow, kind = 0) {
     }
     // names and types are welcome from anywhere, even for an aircraft the antenna is tracking
     if (ac.flight) p.flight = ac.flight; if (ac.category) p.category = ac.category;
+    // version 3.12: the records mark military aircraft. readsb writes dbFlags only when it is not zero, and the type (t) comes from
+    // the same database record, so an aircraft with a type and no dbFlags is known not to be military. One with neither is looked up
+    // in the receiver's own tables (dbLookup), which also reads the military mark.
+    if (ac.dbFlags != null && ac.dbFlags !== '') p.mil = (+ac.dbFlags & 1) === 1;
+    else if (p.mil == null && ac.t) p.mil = false;
     if (ac.t) p.type = ac.t; if (ac.r) p.reg = ac.r; if (ac.desc) p.desc = ac.desc;
     if (remote && !p.remote && p.fresh(t)) continue;         // the antenna's own data wins while it has the aircraft
     if (area && p.src === 'ant' && t - p.tPos < 6) continue;   // the same rule for the flight network: it only fills in what the antenna is not hearing
@@ -566,7 +578,7 @@ async function dbLookup(p) {
       for (let level = 1; level <= 5; level++) {
         const bkey = icao.slice(0, level), dkey = icao.slice(level);
         const data = await (db.shards[bkey] || (db.shards[bkey] = getJSON(db.folder + bkey + '.js', { cache: 'default' }).catch((err) => { delete db.shards[bkey]; throw err; })));
-        if (data[dkey]) { const e = data[dkey]; info.reg = info.reg || e[0] || ''; info.type = info.type || e[1] || ''; info.long = info.long || e[3] || ''; break; }
+        if (data[dkey]) { const e = data[dkey]; info.reg = info.reg || e[0] || ''; info.type = info.type || e[1] || ''; info.long = info.long || e[3] || ''; if (p.mil == null && typeof e[2] === 'string') p.mil = e[2][0] === '1'; break; }
         if (!(data.children && data.children.indexOf(bkey + dkey[0]) !== -1)) break;
       }
     } catch (e) { /* unknown aircraft */ }
@@ -1346,6 +1358,9 @@ function applyCenter(byViewer = true) {
     prevShot = was;   // start from where the camera is now: the old wide shot would already be measured from the new center
   }
 }
+let gallery = null;
+function setFun(k) { S.fun = k && (k === 'random' || FUN[k]) ? k : ''; save(); $('f-fun').value = S.fun; if (gallery) gallery.markFun(S.fun); repaintAll(); }
+function openGallery(tab) { closePhoto(); toggleHelp(false); closeFind(); closeMine(); document.body.classList.remove('panel'); held.clear(); gallery.open(tab); gallery.markFun(S.fun); }
 function initPanel() {
   buildCenterOptions();
   $('f-other').value = S.other; $('f-radius').value = String(S.radius); $('f-pace').value = String(S.pace); $('f-cap').checked = !!S.captions; $('f-sky').value = S.sky; $('f-wx').value = S.wx; $('f-corner').checked = !!S.corner; $('f-lights').value = S.lights; if (__NET__) { $('f-src').value = S.src; $('f-relay').value = S.relay || ''; $('f-netmax').value = String(S.netmax); if ($('f-netmax').value !== String(S.netmax)) { S.netmax = 130; $('f-netmax').value = '130'; } $('f-relay').placeholder = relayBase() && !S.relay ? relayBase() : 'http://'; } $('f-trail').value = String(S.trail); $('f-flight').value = S.follow || '';
@@ -1370,6 +1385,10 @@ function initPanel() {
   if (__NET__) $('f-netmax').onchange = (e) => { S.netmax = +e.target.value; save(); netTick(true); };
   if (__NET__) $('f-src').onchange = (e) => { S.src = e.target.value; save(); netTick(true); updateCorner(simClock || new Date()); };
   $('f-trail').onchange = (e) => { S.trail = +e.target.value; save(); };
+  // version 3.12: the aircraft gallery, and the fun paint chosen here or in it
+  gallery = new Gallery($); gallery.onFun = (k) => setFun(k);
+  $('f-fun').value = S.fun; $('f-fun').onchange = (e) => setFun(e.target.value);
+  $('f-gallery').onclick = () => openGallery();
   renderPlaces(); $('f-places').onsubmit = (e) => { e.preventDefault(); addPlace(); };
   $('f-look').onsubmit = (e) => { e.preventDefault(); lookPlace(); };   // only on Enter or Find, never as the viewer types
   $('f-keep').checked = !!S.keep; $('f-keep').onchange = (e) => { S.keep = e.target.checked; save(); keepNotes(); $('places-note').textContent = S.keep ? 'Your places will be kept on this device.' : 'Your places are no longer kept. They will be forgotten when you close this page.'; };
@@ -1409,6 +1428,7 @@ function initPanel() {
     const tag = el && el.tagName, typing = tag === 'INPUT' && el.type !== 'checkbox';
     if (e.key === 'Escape') { e.preventDefault(); escapeKey(); return; }   // Escape closes the topmost window first, wherever the keyboard focus is
     if (el && el.id === 'find-q') { findKey(e); return; }
+    if (gallery && gallery.isOpen) { if ((e.key === 'g' || e.key === 'G') && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); gallery.close(); } return; }   // with the gallery open, only G and Escape do anything; Enter and Space work its buttons
     if (!$('photo').hidden) { if ((e.key === 'i' || e.key === 'I') && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); closePhoto(); } return; }   // with the photo open, only I and Escape do anything
     if (!$('mine').hidden) { if ((e.key === 'p' || e.key === 'P') && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); closeMine(); } return; }   // with My places open, only P and Escape do anything; Enter and Space work its buttons
     if (typing) { if (e.key === 'Escape') togglePanel(false); return; }
@@ -1439,18 +1459,20 @@ function initPanel() {
     else if (k === 'p' || k === 'P') { e.preventDefault(); openMine(); }
     else if (k === 'l' || k === 'L') openListen();
     else if (k === 'i' || k === 'I') openPhoto();
+    else if (k === 'g' || k === 'G') { e.preventDefault(); openGallery(); }
     else if (k === 't' || k === 'T') { const TR = [0, 2, 5, 10]; S.trail = TR[(TR.indexOf(S.trail) + 1) % TR.length]; save(); $('f-trail').value = String(S.trail); }
     else if (k === 'c' || k === 'C') { S.captions = !S.captions; save(); $('f-cap').checked = S.captions; }
     else if (k === 's' || k === 'S' || k === 'Enter') togglePanel();
   });
   // which keys are down right now, for moving about in fly mode
-  window.addEventListener('keydown', (e) => { const tag = document.activeElement && document.activeElement !== document.body ? document.activeElement.tagName : ''; if (tag === 'INPUT' || tag === 'SELECT' || !$('help').hidden || !$('find').hidden || !$('mine').hidden || !$('photo').hidden || document.body.classList.contains('panel')) return; held.add(e.key); });
+  window.addEventListener('keydown', (e) => { const tag = document.activeElement && document.activeElement !== document.body ? document.activeElement.tagName : ''; if (tag === 'INPUT' || tag === 'SELECT' || !$('help').hidden || !$('find').hidden || !$('mine').hidden || !$('photo').hidden || (gallery && gallery.isOpen) || document.body.classList.contains('panel')) return; held.add(e.key); });
   window.addEventListener('keyup', (e) => { held.delete(e.key); });
   window.addEventListener('blur', () => held.clear());
 }
 function escapeKey() {
   const ae = document.activeElement; if (ae && ae !== document.body && ae.blur) ae.blur();   // give the keyboard back to the page, so the other keys work again
-  if (!$('help').hidden) toggleHelp(false);
+  if (gallery && gallery.isOpen) gallery.close();
+  else if (!$('help').hidden) toggleHelp(false);
   else if (!$('photo').hidden) closePhoto();
   else if (!$('find').hidden) closeFind();
   else if (!$('mine').hidden) closeMine();
@@ -1508,6 +1530,7 @@ const HELP = [
   ['Shift and F', 'Fill the screen'],
   ['L', 'Listen to air traffic control near the view, on LiveATC.net'],
   ['I', 'A photo of the aircraft in the caption, from Planespotters.net'],
+  ['G', 'The aircraft gallery: every shape, the airline and military paint, and fun paint'],
   ['S', 'Open or close the settings'],
   ['H or ?', 'Show or hide this help'],
 ];
@@ -1688,8 +1711,10 @@ function frame() {
   for (const l of labels) { l.sprite.scale.set(k * l.sprite.userData.aspect, k, 1); }
   updateCaption(t); updatePick();
   // if the screen cannot keep up, draw at a lower resolution rather than stutter
+  const galleryOpen = gallery && gallery.isOpen;
+  if (galleryOpen) { gallery.frame(t); fpsN = 0; fpsT = t; }   // the sky is hidden behind the gallery: it is not drawn, and its speed is not judged
   fpsN++; if (!MANUAL && t - fpsT > 5) { const fps = fpsN / (t - fpsT); fpsN = 0; fpsT = t; if (fps < 24 && DPR > 0.75 && document.visibilityState === 'visible' && ++slow >= 2) { slow = 0; DPR = Math.max(0.75, DPR - 0.25); renderer.setPixelRatio(DPR); resize(); } else if (fps >= 24) slow = 0; }
-  if (!MANUAL || renderNext) {
+  if ((!MANUAL || renderNext) && !galleryOpen) {
     renderer.render(scene, camera);
     if (weather.active) { renderer.autoClear = false; renderer.render(weather.scene, weather.camera); renderer.autoClear = true; }
   }
@@ -1702,7 +1727,7 @@ if (S.follow) setFollow(S.follow);
 if (!MANUAL) { poll(); setInterval(followTick, 1000); setInterval(watchTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { get home() { return home; }, set home(v) { home = v; }, save, modelFor, routeHtml, partnerOf, altWords, updateCaption, prepareCaption, get capPlane() { return capPlane; }, cameraOwner, leaveControls, airportLabelAt, centerOnAirport, get labels() { return labels; }, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { MODELS, get gallery() { return gallery; }, setFun, openGallery, paintOf, get home() { return home; }, set home(v) { home = v; }, save, modelFor, routeHtml, partnerOf, altWords, updateCaption, prepareCaption, get capPlane() { return capPlane; }, cameraOwner, leaveControls, airportLabelAt, centerOnAirport, get labels() { return labels; }, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
   net, NET: __NET__ };

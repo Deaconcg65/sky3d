@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3.11, /*EDITION*/.
+  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3.12, /*EDITION*/.
   One self-contained page. Put it on the receiver's web server and open it in a browser.
   Includes three.js (c) 2010-2024 three.js authors, MIT License.
   Shorelines: GSHHG (Wessel and Smith, LGPL) and Natural Earth (public domain). State lines: United States Census Bureau.
@@ -81,6 +81,21 @@ body.hasphoto #listen { right: calc(2.2vw + 318px); }
 #find ul { list-style: none; margin: 6px 0 0; padding: 0; overflow-y: auto; min-height: 0; }
 #find li { padding: 9px 11px; border-radius: 8px; cursor: pointer; } #find li.sel { background: rgba(255,255,255,0.1); }
 #find li b { font-weight: 500; font-size: 16px; white-space: pre; } #find li small { display: block; color: var(--soft); font-size: 13px; margin-top: 2px; }
+#gallery { position: fixed; inset: 0; z-index: 8; background: rgba(4,8,18,0.82); display: flex; align-items: flex-start; justify-content: center; padding: 3vh 0; }
+#gallery > div { width: min(1180px, 96vw); max-height: 94vh; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 22px 10px; -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+#gallery .gtop { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; } #gallery h1 { font-size: 22px; font-weight: 400; margin: 0 auto 0 0; }
+#gallery .gtop button { font: 400 14px var(--face); color: var(--soft); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px; cursor: pointer; }
+#gallery .gtop button.on { color: var(--ink); background: rgba(255,255,255,0.12); } #gallery button:focus-visible { outline: 2px solid var(--lamp); outline-offset: 2px; }
+#gallery .gbody { overflow-y: auto; min-height: 0; margin-top: 12px; padding-right: 4px; }
+#gallery h2 { font-size: 15px; font-weight: 500; color: var(--soft); margin: 18px 0 8px; } #gallery .gnote { color: var(--faint); font-size: 13px; margin: 0 0 10px; line-height: 1.45; }
+.ggrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.gcard { margin: 0; background: rgba(255,255,255,0.04); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.gcard canvas { display: block; width: 100%; aspect-ratio: 5 / 3; background: radial-gradient(ellipse at 50% 35%, #3d5f86 0%, #1c2c44 75%); }
+.gcard figcaption { padding: 9px 11px 11px; font-size: 12.5px; line-height: 1.45; color: var(--soft); } .gcard figcaption b { display: block; color: var(--ink); font-weight: 500; font-size: 14.5px; margin-bottom: 2px; }
+.gcard figcaption span { display: block; margin-top: 3px; } .gcard figcaption button { margin-top: 8px; font: 400 13px var(--face); color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.gcard figcaption button.on { background: rgba(255,255,255,0.14); }
+.gchips { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--soft); padding-bottom: 12px; } .gchips span { display: inline-flex; align-items: center; gap: 6px; }
+.gchips i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.25); }
 #help { position: fixed; inset: 0; z-index: 8; background: rgba(4,8,18,0.74); display: flex; align-items: center; justify-content: center; cursor: pointer; }
 #help > div { width: min(640px, 92vw); max-height: 90vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 24px 28px; cursor: default; }
 #help h1 { font-size: 22px; font-weight: 400; margin: 0 0 6px; } #help dl { grid-template-columns: 9.5em 1fr; font-size: 14.5px; gap: 8px 14px; }
@@ -160,6 +175,17 @@ body.shared #panel .home-only { display: none; }
   <div id="mine-list"></div>
   <div id="mine-note"></div>
 </div>
+<div id="gallery" hidden role="dialog" aria-label="Aircraft gallery"><div>
+  <div class="gtop"><h1>Aircraft gallery</h1>
+    <div role="tablist" aria-label="Gallery pages"><button type="button" role="tab" data-tab="shapes">Shapes</button> <button type="button" role="tab" data-tab="paint">Airline and military paint</button> <button type="button" role="tab" data-tab="fun">Fun paint</button></div>
+    <button id="gallery-close" type="button">Close</button></div>
+  <div class="gbody">
+    <div id="gal-shapes" class="ggrid" role="tabpanel" hidden></div>
+    <div id="gal-paint" role="tabpanel" hidden></div>
+    <div id="gal-fun" role="tabpanel" hidden><p class="gnote">For aircraft with no airline or military paint only, such as private aircraft and airlines the sky does not know. Real paint is never replaced. The same choice is in the settings.</p><div id="gal-fun-grid" class="ggrid"></div></div>
+  </div>
+  <p class="gnote" style="margin:10px 0 0">Move the mouse over a picture to turn it. Press G or Escape to close.</p>
+</div></div>
 <div id="help" hidden role="dialog" aria-label="What the keys do"><div>
   <h1>What the keys do</h1>
   <p class="note" style="margin:0 0 14px">Press H, or click anywhere, to close this.</p>
@@ -259,6 +285,11 @@ body.shared #panel .home-only { display: none; }
   <select id="f-lights"><option value="arr">On aircraft coming in to land</option><option value="both">On arrivals and departures</option><option value="off">Off</option></select>
   <div class="note">Shown at dusk, at night and at dawn on aircraft below 5,000 feet.</div>
 
+  <label for="f-fun">Paint for aircraft with no airline paint</label>
+  <select id="f-fun"><option value="">Plain</option><option value="rainbow">Rainbow</option><option value="bee">Bumblebee</option><option value="flamingo">Flamingo</option><option value="stars">Stars and stripes</option><option value="candy">Candy</option><option value="midnight">Midnight neon</option><option value="random">A different one on each aircraft</option></select>
+  <div class="note">Private aircraft and airlines the sky does not know. Airline and military paint is never replaced.</div>
+  <button id="f-gallery" type="button" class="quiet" style="margin-top:8px">Open the aircraft gallery</button>
+
   <label for="f-trail">Trail behind each aircraft</label>
   <select id="f-trail"><option value="0">None</option><option value="2">2 minutes</option><option value="5">5 minutes</option><option value="10">10 minutes</option></select>
 
@@ -269,7 +300,7 @@ body.shared #panel .home-only { display: none; }
 
   <hr>
   <dl id="keys-dl"></dl>
-  <p class="note" style="margin-top:22px">Version 3.11, /*EDITION*/, November 16, 2026</p>
+  <p class="note" style="margin-top:22px">Version 3.12, /*EDITION*/, November 20, 2026</p>
 </aside>
 <script type="application/json" id="geo-data">/*GEO*/</script>
 <script type="application/json" id="airport-data">/*AIRPORTS*/</script>
