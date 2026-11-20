@@ -248,6 +248,16 @@ const { chromium } = require('playwright');
     return { down: names(L(rt, at(1800, -900, 40.62, -73.85))), up: names(L(rt, at(2500, 1500, 40.66, -73.70))), high: names(L(rt, at(35000, 0, 40, -90))), lost: names(L(rt, at(2000, -800, 39.0, -77.0))), broken: names(L({ _airports: [null, ap('KJFK', 40.64, -73.78)] }, at(35000, 0, 40, -90))) };
   });
   ok('a flight with a stop shows the leg it is on, and a route nowhere near is not trusted', legs.down === 'KLAX-KJFK' && legs.up === 'KJFK-KBOS' && legs.high === 'KLAX-KBOS' && legs.lost === 'none' && legs.broken === 'none', JSON.stringify(legs));
+  // version 3.11: one flight number out and back (RPA 4555 flies LGA to XNA and back): never the same airport at both ends
+  const loops = await page.evaluate(() => {
+    const L = window.__sky.routeLeg, ap = (c, lat, lon) => ({ icao: c, iata: c.slice(1), name: c, lat, lon });
+    const rt = { _airports: [ap('KLGA', 40.78, -73.87), ap('KXNA', 36.28, -94.31), ap('KLGA', 40.78, -73.87)] };
+    const at = (altFt, vrate, lat, lon, track) => ({ ground: false, altFt, vrate, rLat: lat, rLon: lon, track });
+    const names = (l) => l ? l.map((a) => a.icao).join('-') : 'none';
+    return { out: names(L(rt, at(12075, 1500, 40.4, -75.5, 250))), back: names(L(rt, at(30000, 0, 38.5, -85, 70))), sideways: names(L(rt, at(30000, 0, 38.5, -85, 160))), climbing: names(L(rt, at(2500, 1500, 40.75, -73.95, 300))), landing: names(L(rt, at(2000, -900, 40.72, -73.80, 40))),
+      same: names(L({ _airports: [ap('KLGA', 40.78, -73.87), ap('KLGA', 40.78, -73.87)] }, at(12075, 1500, 40.9, -73.5, 60))) };
+  });
+  ok('a flight number that flies out and back shows the leg the aircraft is on, and never the same airport at both ends', loops.out === 'KLGA-KXNA' && loops.back === 'KXNA-KLGA' && loops.sideways === 'none' && loops.climbing === 'KLGA-KXNA' && loops.landing === 'KXNA-KLGA' && loops.same === 'none', JSON.stringify(loops));
   // the first route service does not know a flight: the second one is asked, so its origin can still be shown
   const rtab = await browser.newPage({ viewport: { width: 640, height: 360 } }); rtab.on('pageerror', (e) => errs.push('PAGEERROR (two route services): ' + e.message));
   await rtab.goto(PAGE.replace('routeApi=/mock/routeset', 'routeApi=/mock/routeset-none,/mock/routeset')); await rtab.waitForTimeout(5000);
@@ -297,10 +307,32 @@ const { chromium } = require('playwright');
   ok('in fly mode the fly keys show in the corner', fk1.keys, JSON.stringify(fk1));
   await page.waitForTimeout(7500);
   const fk2 = await keyState();
-  ok('the fly keys stay for as long as fly mode lasts, not only the first seven seconds', fk2.kind === 'fly' && fk2.keys, JSON.stringify(fk2));
+  ok('the fly keys stay while the keys are in use, not only the first seven seconds', fk2.kind === 'fly' && fk2.keys, JSON.stringify(fk2));
+  // version 3.11: the box fades 12 seconds after the last key, though fly mode goes on (Chris: it came up with the mouse and never went away)
+  await page.waitForTimeout(5500);
+  const fk2b = await keyState();
+  ok('12 seconds after the last key the fly keys fade, while fly mode goes on', fk2b.kind === 'fly' && !fk2b.keys, JSON.stringify(fk2b));
+  await page.keyboard.press('ArrowLeft'); await page.waitForTimeout(400);
+  const fk2c = await keyState();
+  ok('the next fly key brings the fly keys back', fk2c.kind === 'fly' && fk2c.keys, JSON.stringify(fk2c));
   await page.keyboard.press('Escape'); await page.waitForTimeout(600);
   const fk3 = await keyState();
   ok('the fly keys go away when fly mode ends', fk3.kind !== 'fly' && !fk3.keys, JSON.stringify(fk3));
+  // the mouse alone: a drag takes the controls without the key box, and the small scrolls a Magic Mouse or trackpad sends while the mouse moves do not take them at all
+  await page.mouse.move(420, 330);
+  for (let i = 0; i < 30; i++) { await page.mouse.wheel(0, 3); await page.mouse.move(420 + i * 4, 330 + i * 2); await page.waitForTimeout(100); }   // three seconds of touches: more than enough in all, never enough in one half second
+  await page.waitForTimeout(400);
+  const ms1 = await keyState();
+  ok('small scroll touches while the mouse moves do not take the controls or bring up the fly keys', ms1.kind !== 'fly' && !ms1.keys, JSON.stringify(ms1));
+  // this comes about four seconds after the last fly key of the time at the controls before, so it also shows that a new time starts with no key pressed
+  await page.mouse.wheel(0, 120); await page.waitForTimeout(400);
+  const ms2 = await keyState();
+  ok('a real turn of the mouse wheel still zooms by taking the controls, without the fly keys, even just after a time at the controls that used keys', ms2.kind === 'fly' && !ms2.keys, JSON.stringify(ms2));
+  await page.keyboard.press('Escape'); await page.waitForTimeout(600);
+  await page.mouse.move(400, 320); await page.mouse.down(); await page.mouse.move(470, 340, { steps: 6 }); await page.mouse.up(); await page.waitForTimeout(400);
+  const ms3 = await keyState();
+  ok('a drag takes the controls without bringing up the fly keys', ms3.kind === 'fly' && !ms3.keys, JSON.stringify(ms3));
+  await page.keyboard.press('Escape'); await page.waitForTimeout(600);
   await page.keyboard.press('s'); await page.waitForTimeout(400); await page.focus('#f-cap'); await page.evaluate(() => document.body.classList.remove('panel'));
   await page.keyboard.press('ArrowUp'); await page.waitForTimeout(400);
   const fk4 = await keyState();
@@ -419,6 +451,24 @@ const { chromium } = require('playwright');
   const bizTypes = ['C25C', 'C56X', 'C680', 'C700', 'CL35', 'GLF6', 'GLEX', 'E55P', 'LJ45', 'FA7X', 'H25B', 'PC24', 'HDJT'];
   ok('Citations, Challengers, Gulfstreams, Phenoms, Learjets, Falcons, Hawkers, the PC-24 and the HondaJet are drawn as business jets; the Cessna 172, the airliners and the C-17 are not', bizTypes.every((t) => biz.kinds[t] === 'biz') && biz.kinds.C172 === 'light' && biz.kinds.B738 === 'jet' && biz.kinds.A320 === 'jet' && biz.kinds.C17 === 'heavy' && biz.kinds.E75L === 'jet', JSON.stringify(biz.kinds));
   ok('the business jet has its engines at the back of the body, nothing under its wings, a tailplane on top of the fin, and is drawn smaller than an airliner', biz.rearHigh > 10 && biz.underWing === 0 && biz.finTop > 0.19 && biz.tailWide > 0.15 && biz.len < 1, JSON.stringify(biz));
+  // ---------- version 3.11: the 757, twin turboprops, and a helicopter with skids and a tail rotor ----------
+  const s311 = await page.evaluate(() => {
+    const s = window.__sky, kinds = {};
+    for (const t of ['B752', 'B753', 'B738', 'A321', 'B763', 'AT72', 'AT76', 'DH8D', 'D328', 'J328', 'SF34', 'SB20', 'E120', 'JS41', 'BE20', 'B350', 'BE9L', 'PC12', 'TBM9', 'C208', 'E75L', 'CRJ9']) kinds[t] = s.modelFor('', t);
+    const body = (k) => { const m = new s.PlaneMesh(k, s.paintFor('UAL1', 'abc123', k)), pos = m.mesh.geometry.attributes.position.array; let r = 0, propFront = 0, wingHi = 0, wingLo = 0, skid = 0;
+      for (let i = 0; i < pos.length; i += 3) { const x = pos[i], y = pos[i + 1], z = pos[i + 2];
+        if (Math.abs(x) < 0.005 && z > -0.25 && z < 0.34) r = Math.max(r, y);                                   // how tall the body is in the middle
+        if (Math.abs(x) > 0.07 && Math.abs(x) < 0.27 && z > 0.22) propFront++;                                 // propellers ahead of the wing, beside the body
+        if (Math.abs(x) > 0.55 && Math.abs(x) < 0.63 && z > -0.05 && z < 0.15) { if (y > 0.035) wingHi++; else if (y < -0.015) wingLo++; }
+        if (y < -0.12) skid++; }
+      const out = { r: +r.toFixed(3), propFront, wingHi, wingLo, skid, len: m.len, tailRotor: !!m.tailRotor }; m.dispose && m.dispose(); return out; };
+    return { kinds, b757: body('b757'), jet: body('jet'), turbo: body('turbo'), turbolow: body('turbolow'), kingair: body('kingair'), heli: body('heli') };
+  });
+  ok('the 757 gets its own shape, and the 737, A321, 767 and regional jets do not', s311.kinds.B752 === 'b757' && s311.kinds.B753 === 'b757' && s311.kinds.B738 === 'jet' && s311.kinds.A321 === 'jet' && s311.kinds.B763 === 'heavy2' && s311.kinds.E75L === 'jet' && s311.kinds.CRJ9 === 'jet', JSON.stringify(s311.kinds));
+  ok('the 757 is longer and slimmer than the plain twin jet', s311.b757.len > s311.jet.len + 0.1 && s311.b757.r < s311.jet.r - 0.005, JSON.stringify({ b757: s311.b757, jet: s311.jet }));
+  ok('ATRs, Dash 8s and Dorniers are twin turboprops with the wing on top; Saabs, the Brasilia and the Jetstream 41 have it below; King Airs have it below; the PC-12, TBM and Caravan are small planes; the Dornier 328JET keeps its jets', ['AT72', 'AT76', 'DH8D', 'D328'].every((t) => s311.kinds[t] === 'turbo') && ['SF34', 'SB20', 'E120', 'JS41'].every((t) => s311.kinds[t] === 'turbolow') && ['BE20', 'B350', 'BE9L'].every((t) => s311.kinds[t] === 'kingair') && ['PC12', 'TBM9', 'C208'].every((t) => s311.kinds[t] === 'light') && s311.kinds.J328 !== 'turbo', JSON.stringify(s311.kinds));
+  ok('the twin turboprop has a propeller in front of each engine, its wing above the body, the Saab shape and the King Air their wing below', s311.turbo.propFront > 20 && s311.turbo.wingHi > 10 && s311.turbo.wingLo === 0 && s311.kingair.propFront > 20 && s311.kingair.wingLo > 10 && s311.kingair.wingHi === 0 && s311.kingair.len < s311.turbo.len && s311.turbolow.wingLo > 10 && s311.turbolow.wingHi === 0 && s311.turbolow.propFront > 20 && s311.turbolow.len === s311.turbo.len, JSON.stringify({ turbo: s311.turbo, turbolow: s311.turbolow, kingair: s311.kingair }));
+  ok('the helicopter stands on skids and has a rotor on its tail', s311.heli.skid > 20 && s311.heli.tailRotor, JSON.stringify(s311.heli));
   // ---------- version 3.9: the caption names both ends of the trip ----------
   const words = await page.evaluate(() => {
     const s = window.__sky, A = { name: 'Palm Beach International', location: 'West Palm Beach', iata: 'PBI', icao: 'KPBI', lat: 26.6832, lon: -80.0956 }, B = { name: 'Hartsfield Jackson Atlanta International', location: 'Atlanta', iata: 'ATL', icao: 'KATL', lat: 33.6367, lon: -84.4281 };
@@ -439,8 +489,36 @@ const { chromium } = require('playwright');
   ok('with a relay beside the page, routes are asked of the relay and not of the route services directly', viaRelay.asked > 0 && viaRelay.got.some(Boolean) && viaRelay.n.relay >= viaRelay.asked && viaRelay.n.direct === 0, JSON.stringify(viaRelay));
   // ---------- version 3.10: regional airlines under their partner's name, and altitudes near the ground ----------
   const regional = await page.evaluate(() => { const f = window.__sky.partnerOf, ap = (a, b) => [{ iata: a }, { iata: b }], k = (x) => (x ? x.key || (x.some ? 'some' : '?') : 'own');
-    return { rpaBos: k(f('RPA5604', ap('MEM', 'BOS'))), rpaNone: k(f('RPA5604', null)), rpaLga: k(f('RPA4400', ap('LGA', 'ROC'))), skwDen: k(f('SKW3000', ap('DEN', 'BIL'))), skwSea: k(f('SKW3000', ap('SEA', 'GEG'))), edv: k(f('EDV5000', null)), qxe: k(f('QXE2100', null)), dal: k(f('DAL1311', ap('PBI', 'ATL'))), tail: k(f('N345MG', null)) }; });
-  ok('a regional airline that flies for several partners is named for the one whose hub is on its route, and otherwise flies for a partner', regional.rpaBos === 'DAL' && regional.rpaNone === 'some' && regional.rpaLga === 'some' && regional.skwDen === 'UAL' && regional.skwSea === 'some' && regional.edv === 'DAL' && regional.qxe === 'ASA' && regional.dal === 'own' && regional.tail === 'own', JSON.stringify(regional));
+    return { rpaBos: k(f('RPA5604', ap('MEM', 'BOS'))), rpaNone: k(f('RPA5604', null)), rpaLga: k(f('RPA5400', ap('LGA', 'ROC'))), rpa4466: k(f('RPA4466', ap('LGA', 'BOS'))), rpa4466n: k(f('RPA4466', null)), rpa4555: k(f('RPA4555', null)), ash: k(f('ASH6285', null)), ash4400: k(f('ASH4400', [{ iata: 'LGA' }, { iata: 'BOS' }])), skwDen: k(f('SKW3000', ap('DEN', 'BIL'))), skwSea: k(f('SKW3000', ap('SEA', 'GEG'))), edv: k(f('EDV5000', null)), qxe: k(f('QXE2100', null)), dal: k(f('DAL1311', ap('PBI', 'ATL'))), tail: k(f('N345MG', null)) }; });
+  ok('a regional airline that flies for several partners is named from its flight number where that is known (RPA 4466 LGA to BOS and RPA 4555 are American; Mesa, part of Republic, is always United), then for the one whose hub is on its route, and otherwise flies for a partner', regional.rpaBos === 'DAL' && regional.rpaNone === 'some' && regional.rpaLga === 'some' && regional.rpa4466 === 'AAL' && regional.rpa4466n === 'AAL' && regional.rpa4555 === 'AAL' && regional.ash === 'UAL' && regional.ash4400 === 'UAL' && regional.skwDen === 'UAL' && regional.skwSea === 'some' && regional.edv === 'DAL' && regional.qxe === 'ASA' && regional.dal === 'own' && regional.tail === 'own', JSON.stringify(regional));
+  // ---------- version 3.11: a photo of the aircraft in the caption, from Planespotters.net ----------
+  const ph = await browser.newPage({ viewport: { width: 960, height: 540 } }); ph.on('pageerror', (e) => errs.push('PAGEERROR (photos): ' + e.message));
+  await ph.goto(PAGE + '&photoApi=/mock/photos/'); await ph.waitForTimeout(5000);
+  await ph.evaluate(() => { const s = window.__sky; s.setFollow(''); const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.callsign()); s.lockOn(p); });
+  await ph.waitForFunction(() => document.getElementById('cap').classList.contains('on'), null, { timeout: 15000 }).catch(() => {});
+  const btnShown = await ph.evaluate(() => !document.getElementById('photobtn').hidden && document.body.classList.contains('hasphoto'));
+  await ph.keyboard.press('i');
+  await ph.waitForFunction(() => !document.getElementById('photo-credit').hidden, null, { timeout: 10000 }).catch(() => {});
+  const good = await ph.evaluate(() => { const c = document.getElementById('photo-credit'), a = c.querySelector('a'); return { open: !document.getElementById('photo').hidden, title: document.getElementById('photo-title').textContent, credit: c.textContent, imgs: c.querySelectorAll('img').length, link: a && a.href, target: a && a.target, rel: a && a.rel, src: document.getElementById('photo-img').getAttribute('src') }; });
+  ok('the I key opens a photo of the aircraft in the caption, with the photographer named as plain text and a link to its Planespotters.net page', btnShown && good.open && good.title.length > 0 && /^Photo © Pat Spotter <img/.test(good.credit) && good.imgs === 0 && /^https:\/\/www\.planespotters\.net\/photo\//.test(good.link || '') && good.target === '_blank' && /noopener/.test(good.rel || '') && /^https:\/\/t\.plnspttrs\.net\//.test(good.src || ''), JSON.stringify(Object.assign(good, { btnShown })));
+  await ph.keyboard.press('Escape');
+  const shut = await ph.evaluate(() => document.getElementById('photo').hidden);
+  // the same aircraft under another identity: one with no photo, and one whose answer points somewhere other than Planespotters
+  const tryHex = (hex) => ph.evaluate(async (h) => { const s = window.__sky, p = s.capPlane, was = p.hex; p.hex = h; document.getElementById('photobtn').click();
+    for (let i = 0; i < 40 && /Looking/.test(document.getElementById('photo-note').textContent); i++) await new Promise((r) => setTimeout(r, 250));
+    const out = { note: document.getElementById('photo-note').textContent, credit: document.getElementById('photo-credit').hidden, src: document.getElementById('photo-img').getAttribute('src') };
+    document.getElementById('photo-close').click(); p.hex = was; return out; }, hex);
+  const none = await tryHex('eeeee0'), evil = await tryHex('bad001');
+  ok('Escape closes the photo, an aircraft with no photo says so, and a photo from anywhere but Planespotters is not shown', shut && /no photo/.test(none.note) && none.credit && !none.src && /no photo/.test(evil.note) && evil.credit && !evil.src, JSON.stringify({ shut, none, evil }));
+  await ph.close();
+  // the network edition with a relay asks the relay for photos, not Planespotters directly
+  await sim('/ctl/photoasks?reset=1');
+  await rel.evaluate(() => { const s = window.__sky; s.setFollow(''); const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.callsign()); s.lockOn(p); });
+  await rel.waitForFunction(() => document.getElementById('cap').classList.contains('on'), null, { timeout: 15000 }).catch(() => {});
+  await rel.keyboard.press('i');
+  await rel.waitForFunction(() => !document.getElementById('photo-credit').hidden, null, { timeout: 10000 }).catch(() => {});
+  const relPh = await sim('/ctl/photoasks'), relCredit = await rel.evaluate(() => { const c = document.getElementById('photo-credit'); const t = c.hidden ? '' : c.textContent; document.getElementById('photo-close').click(); return t; });
+  ok('with a relay beside the page, photos are asked of the relay and not of Planespotters directly', relPh.relay > 0 && relPh.hex === 0 && relPh.reg === 0 && /Pat Spotter/.test(relCredit), JSON.stringify(Object.assign(relPh, { relCredit })));
   const low = await page.evaluate(() => { const w = window.__sky.altWords; return { neg: w(false, -150, 25), low: w(false, 75, 25), up: w(false, 2450, 25), ground: w(true, 0, 25) }; });
   ok('an aircraft reading below zero or within 100 feet of it is near the ground, not at minus so many feet', low.neg === 'near the ground' && low.low === 'near the ground' && low.up === '2,450 feet' && low.ground === 'on the ground', JSON.stringify(low));
   // the count in the corner: the antenna's own aircraft are counted at home, and not while the sky shown is far away

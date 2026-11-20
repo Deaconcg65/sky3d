@@ -640,20 +640,46 @@ async function getRoute(p) {
 // next stop when it is climbing away. The route table is kept by volunteers and airlines reuse flight numbers, so a low
 // aircraft near none of its airports has another flight's route on file, and nothing is shown.
 function routeLeg(rt, p) {
-  const leg = pickLeg(rt, p);
-  return leg && leg[0] && leg[1] && typeof leg[0] === 'object' && typeof leg[1] === 'object' ? leg : null;   // never an airport that is missing
+  const leg = pickLeg(rt, p), code = (a) => a && (a.icao || a.iata);
+  if (!leg || !leg[0] || !leg[1] || typeof leg[0] !== 'object' || typeof leg[1] !== 'object') return null;   // never an airport that is missing
+  if (code(leg[0]) && code(leg[0]) === code(leg[1])) return null;   // never the same airport at both ends (version 3.11): the route is not known
+  return leg;
+}
+// A flight number that flies out and back (LGA to XNA to LGA, version 3.11) starts and ends at the same airport, so first to last
+// says nothing. High up, the leg is the one whose line the aircraft is on and whose far end it is heading for. When two legs fit
+// equally well it cannot be told, and the route is not shown.
+function legAloft(ap, p) {
+  const fits = [];
+  for (let i = 0; i < ap.length - 1; i++) {
+    const a = ap[i], b = ap[i + 1];
+    if (!a || !b || !isFinite(a.lat) || !isFinite(b.lat) || (a.icao || a.iata) === (b.icao || b.iata)) continue;
+    const len = gcDist(a.lat, a.lon, b.lat, b.lon), off = gcDist(a.lat, a.lon, p.rLat, p.rLon) + gcDist(p.rLat, p.rLon, b.lat, b.lon) - len;
+    const toward = Math.abs(angDiff(p.track, bearing(p.rLat, p.rLon, b.lat, b.lon))) < 60;
+    if (toward && off < Math.max(80, len * 0.25)) fits.push({ i, off });
+  }
+  if (!fits.length) return null;
+  fits.sort((x, y) => x.off - y.off);
+  if (fits.length > 1 && fits[1].off - fits[0].off < 40) return null;
+  return [ap[fits[0].i], ap[fits[0].i + 1]];
 }
 function pickLeg(rt, p) {
   const ap = rt && rt._airports; if (!ap || ap.length < 2) return null;
   const first = ap[0], last = ap[ap.length - 1];
-  if (p.ground || p.altFt >= 6000) return [first, last];
+  const loop = ap.length > 2 && first && last && (first.icao || first.iata) === (last.icao || last.iata);
+  if (p.ground || p.altFt >= 6000) return loop ? legAloft(ap, p) : [first, last];
   let at = -1, best = 120;
   ap.forEach((a, i) => { if (!a || !isFinite(a.lat) || !isFinite(a.lon)) return; const d = gcDist(a.lat, a.lon, p.rLat, p.rLon); if (d <= best) { best = d; at = i; } });
   if (at === -1) return null;
   if (ap.length === 2) return [first, last];
+  const here = ap[at].icao || ap[at].iata, same = ap.map((a, i) => (a && (a.icao || a.iata) === here ? i : -1)).filter((i) => i >= 0);
+  if (same.length > 1) {   // the airport is on the route more than once (out and back): climbing away it is the leg out, coming down the leg in
+    if (p.vrate > 300 && same[0] < ap.length - 1) return [ap[same[0]], ap[same[0] + 1]];
+    if (p.vrate < -200 && same[same.length - 1] > 0) return [ap[same[same.length - 1] - 1], ap[same[same.length - 1]]];
+    return legAloft(ap, p);
+  }
   if (at > 0 && (p.vrate < -200 || at === ap.length - 1)) return [ap[at - 1], ap[at]];
   if (at < ap.length - 1 && (p.vrate > 300 || at === 0)) return [ap[at], ap[at + 1]];
-  return [first, last];
+  return loop ? legAloft(ap, p) : [first, last];
 }
 const follow = { want: '', reg: '', hex: null, lastRemote: 0, state: 'off', since: 0, netOk: true, tour: false };   // tour: the viewer pressed A, so the followed flight waits
 // Follow has the camera only while a flight is found and the viewer has not paused it with A
@@ -837,7 +863,7 @@ let shot = newShot('wide'), prevShot = null;
 shot.az0 = 200;
 let paused = false; const recent = [];
 // Version 3.6: taking the controls. In fly mode the camera is wherever the viewer puts it; fly.last is when they last touched it.
-const fly = { lat: 0, lon: 0, alt: 0, az: 200, el: 25, dist: 100, last: 0, since: 0 };
+const fly = { lat: 0, lon: 0, alt: 0, az: 200, el: 25, dist: 100, last: 0, since: 0, keysAt: -1e9 };
 const held = new Set();                 // keys held down right now
 let clicked = null, clickUntil = 0;     // an aircraft the viewer clicked, and when its details go away again
 const hold = () => paused || nowS() < clickUntil;
@@ -864,7 +890,7 @@ function takeCamera(owner, p) {
   const t = nowS();
   if (owner === 'fly') {
     fly.last = t; if (shot.kind === 'fly') return;
-    Object.assign(fly, { lat: pose.lat, lon: pose.lon, alt: pose.alt, az: pose.az, el: pose.el, dist: pose.dist, since: t });
+    Object.assign(fly, { lat: pose.lat, lon: pose.lon, alt: pose.alt, az: pose.az, el: pose.el, dist: pose.dist, since: t, keysAt: -1e9 });   // a new time at the controls starts with no key pressed: a key sets it again just after
     paused = false; hideCaption(); begin('fly', 0.01); prevShot = null;   // start exactly where the camera is, with no glide
     return;
   }
@@ -884,7 +910,7 @@ function flyStep(dt) {
   if (shot.kind !== 'fly') return;
   const mv = (held.has('ArrowUp') ? 1 : 0) - (held.has('ArrowDown') ? 1 : 0), turn = (held.has('ArrowRight') ? 1 : 0) - (held.has('ArrowLeft') ? 1 : 0);
   if (!mv && !turn) return;
-  fly.last = nowS();
+  fly.last = fly.keysAt = nowS();
   const scale = Math.max(fly.dist, 2);   // the farther out the camera is, the faster it moves
   if (turn) fly.az -= turn * 50 * dt;   // the camera faces the compass heading of minus its orbit angle, so turning right lowers the angle
   if (mv) {
@@ -892,6 +918,7 @@ function flyStep(dt) {
     else { const a = -fly.az * D2R, d = mv * scale * 0.08 * dt; fly.lat += (d * Math.cos(a)) / 111.19; fly.lon += (d * Math.sin(a)) / (111.19 * Math.cos(fly.lat * D2R)); }
   }
 }
+const FLY_KEYS_SECS = 12, WHEEL_TAKE = 60;
 function zoomFly(f) { enterFly(); fly.dist = clamp(fly.dist * f, 0.15, 700); fly.last = nowS(); }
 const PV = new THREE.Vector3();
 // the aircraft nearest to a point on the screen, if one is close enough to mean it
@@ -1055,6 +1082,58 @@ function updateListen() {
 }
 function openListen() { if (listenAp) window.open('https://www.liveatc.net/search/?icao=' + encodeURIComponent(listenAp[0]), '_blank', 'noopener'); }
 
+// ---------- aircraft photo (version 3.11) ----------
+// A photo of the aircraft in the caption, from Planespotters.net, shown with its photographer's name and a link to its page there,
+// as Planespotters asks. Only the aircraft's transponder code and registration are sent. The network edition asks the relay first,
+// which keeps answers for a day and asks Planespotters for everyone at once; without a relay, or when it cannot answer, the page
+// asks Planespotters itself. Either way the photo is loaded by the viewer's browser from Planespotters.
+const PHOTO_SRC = /^https:\/\/[a-z0-9.-]{1,60}\.plnspttrs\.net\/[A-Za-z0-9/_.-]{1,200}$/, PHOTO_PAGE = /^https:\/\/www\.planespotters\.net\/photo\/[A-Za-z0-9/_.-]{1,200}$/;
+const photoKept = new Map();   // by transponder code: { t, photo }
+let photoFor = null;           // the aircraft whose photo window is open
+function cleanPhoto(ph) { return ph && typeof ph.src === 'string' && PHOTO_SRC.test(ph.src) && typeof ph.link === 'string' && PHOTO_PAGE.test(ph.link) && typeof ph.by === 'string' ? { src: ph.src, link: ph.link, by: ph.by.slice(0, 80), w: ph.w, h: ph.h } : null; }
+function fromPlanespotters(data) {   // the first usable photo in Planespotters' own answer
+  for (const ph of (data && Array.isArray(data.photos) ? data.photos : [])) {
+    const t = ph && (ph.thumbnail_large || ph.thumbnail); if (!t) continue;
+    const c = cleanPhoto({ src: t.src, link: ph.link, by: ph.photographer, w: t.size && t.size.width, h: t.size && t.size.height }); if (c) return c;
+  }
+  return null;
+}
+async function findPhoto(p) {
+  const hex = (p.hex || '').toLowerCase(), reg = ((p.info && p.info.reg) || p.reg || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 10), t = nowS();
+  if (!/^[0-9a-f]{6}$/.test(hex)) return null;
+  const hit = photoKept.get(hex); if (hit && t - hit.t < (hit.photo ? 86400 : 3600)) return hit.photo;
+  let photo, known = false;
+  const rb = __NET__ && !Q.has('photoApi') ? relayBase() : '';
+  if (rb) { try { const d = await getJSON(rb + '/photo/' + hex + (reg.length >= 2 ? '/' + reg : '')); photo = cleanPhoto(d.photo); known = true; } catch (e) { /* the relay could not answer: ask Planespotters directly */ } }
+  if (!known) {
+    const base = Q.get('photoApi') || 'https://api.planespotters.net/pub/photos/';
+    photo = fromPlanespotters(await getJSON(base + 'hex/' + hex));
+    if (!photo && reg.length >= 2) photo = fromPlanespotters(await getJSON(base + 'reg/' + encodeURIComponent(reg)));
+  }
+  photoKept.set(hex, { t, photo: photo || null }); if (photoKept.size > 500) photoKept.delete(photoKept.keys().next().value);
+  return photo || null;
+}
+function openPhoto() {
+  const p = capPlane; if (!p || !capShown) return;
+  closeMine(); if (!$('find').hidden) closeFind();
+  photoFor = p; const name = $('c-flight').textContent || p.hex.toUpperCase(), what = $('c-air').textContent;
+  $('photo-title').textContent = what ? name + ', ' + what : name;
+  const img = $('photo-img'), credit = $('photo-credit'), note = $('photo-note');
+  img.hidden = true; img.removeAttribute('src'); credit.hidden = true; credit.textContent = ''; note.textContent = 'Looking for a photo on Planespotters.net...';
+  $('photo').hidden = false; $('photo-close').focus();
+  findPhoto(p).then((ph) => {
+    if (photoFor !== p || $('photo').hidden) return;
+    if (!ph) { note.textContent = 'Planespotters.net has no photo of this aircraft.'; return; }
+    note.textContent = '';
+    img.onload = () => { if (photoFor === p) img.hidden = false; }; img.onerror = () => { if (photoFor === p) note.textContent = 'The photo did not load. Planespotters.net may be busy.'; };
+    if (ph.w && ph.h) { img.width = ph.w; img.height = ph.h; }
+    img.alt = 'Photo of ' + $('photo-title').textContent; img.src = ph.src;
+    const a = document.createElement('a'); a.href = ph.link; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = 'Planespotters.net';
+    credit.append('Photo \u00a9 ' + ph.by + ', ', a); credit.hidden = false;
+  }).catch(() => { if (photoFor === p && !$('photo').hidden) note.textContent = 'Planespotters.net did not answer. Try again in a moment.'; });
+}
+function closePhoto() { const w = $('photo'); if (w.hidden) return; w.hidden = true; photoFor = null; const ae = document.activeElement; if (ae && w.contains(ae) && ae.blur) ae.blur(); }
+
 // ---------- caption ----------
 let capPlane = null, capShown = false, capRoute = null, capInfo = null;
 function hideCaption() { capShown = false; $('cap').classList.remove('on'); }
@@ -1112,6 +1191,7 @@ function updateCaption(t) {
     $('c-prog').hidden = !(shot.kind === 'follow' && leg); $('c-progtext').textContent = prog; $('c-progtext').hidden = !prog;
   }
   if (show !== capShown) { capShown = show; $('cap').classList.toggle('on', show); }
+  if ($('photobtn')._on !== show) { $('photobtn')._on = show; $('photobtn').hidden = !show; document.body.classList.toggle('hasphoto', show); }   // the Photo button shows while a caption does
   // quiet status line
   let msg = '';
   const netOn = __NET__ && S.src !== 'antenna';
@@ -1124,7 +1204,9 @@ function updateCaption(t) {
   else if (shot.lock && t - shot.t0 < 9) msg = 'Staying with this aircraft. Press A for the auto tour, or Escape.';
   else if (shot.kind === 'fly' && t - fly.since < 7) msg = 'You have the controls. Drag to look around, arrow keys to move, plus and minus to zoom, A for the auto tour.';
   else if (t - bootT < 14 && shot.kind === 'wide') msg = 'Press H to see what the keys do.';
-  const flying = shot.kind === 'fly'; if ($('flykeys')._on !== flying) { $('flykeys')._on = flying; $('flykeys').classList.toggle('on', flying); }   // the fly keys stay in the corner for as long as fly mode lasts
+  // The fly keys show while the keys are in use and fade 12 seconds after the last one (version 3.11). In 3.8.1 they stayed for all of
+  // fly mode, and a drag or a scroll with the mouse also starts fly mode, so a viewer using only the mouse had the box up for good.
+  const keysOn = shot.kind === 'fly' && t - (fly.keysAt || -1e9) < FLY_KEYS_SECS; if ($('flykeys')._on !== keysOn) { $('flykeys')._on = keysOn; $('flykeys').classList.toggle('on', keysOn); }
   if ($('msg')._t !== msg) { $('msg')._t = msg; if (msg) $('msg').textContent = msg; $('msg').classList.toggle('on', !!msg); }
 }
 
@@ -1275,6 +1357,7 @@ function initPanel() {
   $('f-flyback').value = String(S.flyBack); $('f-flyback').onchange = (e) => { S.flyBack = +e.target.value; save(); };
   fillKeys(); $('help').onclick = () => toggleHelp(false); $('mine-close').onclick = () => closeMine();
   $('findbtn').onclick = () => { $('findbtn').blur(); openFind(); };
+  $('photobtn').onclick = () => { $('photobtn').blur(); openPhoto(); }; $('photo-close').onclick = () => closePhoto();
   $('find-q').oninput = () => { findSel = 0; renderFind(); };
   canvasControls();
   $('f-cap').onchange = (e) => { S.captions = e.target.checked; save(); };
@@ -1326,6 +1409,7 @@ function initPanel() {
     const tag = el && el.tagName, typing = tag === 'INPUT' && el.type !== 'checkbox';
     if (e.key === 'Escape') { e.preventDefault(); escapeKey(); return; }   // Escape closes the topmost window first, wherever the keyboard focus is
     if (el && el.id === 'find-q') { findKey(e); return; }
+    if (!$('photo').hidden) { if ((e.key === 'i' || e.key === 'I') && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); closePhoto(); } return; }   // with the photo open, only I and Escape do anything
     if (!$('mine').hidden) { if ((e.key === 'p' || e.key === 'P') && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); closeMine(); } return; }   // with My places open, only P and Escape do anything; Enter and Space work its buttons
     if (typing) { if (e.key === 'Escape') togglePanel(false); return; }
     // An arrow key with the settings open, on a checkbox or a button, closes the settings and moves the sky as usual: after ticking
@@ -1346,26 +1430,28 @@ function initPanel() {
     else if (k === 'n' || (k === 'ArrowRight' && !flying)) nextAircraft();
     else if (k === 'a' || k === 'A') autoTour();
     else if (k === 'w' || k === 'W') { clickUntil = 0; paused = false; if (!followOwns() || flying || shot.lock) goWide(); }
-    else if (k === 'f') enterFly();
+    else if (k === 'f') { enterFly(); fly.keysAt = nowS(); }
     else if (k === 'F') { if (document.fullscreenElement) document.exitFullscreen(); else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {}); }
-    else if (k === '+' || k === '=') zoomFly(0.8);
-    else if (k === '-' || k === '_') zoomFly(1.25);
-    else if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || (k === 'ArrowRight' && flying)) { e.preventDefault(); enterFly(); }
+    else if (k === '+' || k === '=') { zoomFly(0.8); fly.keysAt = nowS(); }
+    else if (k === '-' || k === '_') { zoomFly(1.25); fly.keysAt = nowS(); }
+    else if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || (k === 'ArrowRight' && flying)) { e.preventDefault(); enterFly(); fly.keysAt = nowS(); }
     else if (k === '/') { e.preventDefault(); openFind(); }
     else if (k === 'p' || k === 'P') { e.preventDefault(); openMine(); }
     else if (k === 'l' || k === 'L') openListen();
+    else if (k === 'i' || k === 'I') openPhoto();
     else if (k === 't' || k === 'T') { const TR = [0, 2, 5, 10]; S.trail = TR[(TR.indexOf(S.trail) + 1) % TR.length]; save(); $('f-trail').value = String(S.trail); }
     else if (k === 'c' || k === 'C') { S.captions = !S.captions; save(); $('f-cap').checked = S.captions; }
     else if (k === 's' || k === 'S' || k === 'Enter') togglePanel();
   });
   // which keys are down right now, for moving about in fly mode
-  window.addEventListener('keydown', (e) => { const tag = document.activeElement && document.activeElement !== document.body ? document.activeElement.tagName : ''; if (tag === 'INPUT' || tag === 'SELECT' || !$('help').hidden || !$('find').hidden || !$('mine').hidden || document.body.classList.contains('panel')) return; held.add(e.key); });
+  window.addEventListener('keydown', (e) => { const tag = document.activeElement && document.activeElement !== document.body ? document.activeElement.tagName : ''; if (tag === 'INPUT' || tag === 'SELECT' || !$('help').hidden || !$('find').hidden || !$('mine').hidden || !$('photo').hidden || document.body.classList.contains('panel')) return; held.add(e.key); });
   window.addEventListener('keyup', (e) => { held.delete(e.key); });
   window.addEventListener('blur', () => held.clear());
 }
 function escapeKey() {
   const ae = document.activeElement; if (ae && ae !== document.body && ae.blur) ae.blur();   // give the keyboard back to the page, so the other keys work again
   if (!$('help').hidden) toggleHelp(false);
+  else if (!$('photo').hidden) closePhoto();
   else if (!$('find').hidden) closeFind();
   else if (!$('mine').hidden) closeMine();
   else if (document.body.classList.contains('panel')) togglePanel(false);
@@ -1378,7 +1464,7 @@ function canvasControls() {
   canvas.addEventListener('pointerdown', (e) => {
     // a click on the sky closes the settings, My places and search, and takes the keyboard back from any control, so the keys work again
     if (document.body.classList.contains('panel')) togglePanel(false);
-    closeMine(); if (!$('find').hidden) closeFind();
+    closeMine(); closePhoto(); if (!$('find').hidden) closeFind();
     const ae = document.activeElement; if (ae && ae !== document.body && ae !== canvas && ae.blur) ae.blur();
     if (e.button !== 0) return; drag = { x: e.clientX, y: e.clientY, az: 0, el: 0, moved: false }; try { canvas.setPointerCapture(e.pointerId); } catch (x) { /* fine without it */ } });
   canvas.addEventListener('pointermove', (e) => {
@@ -1389,7 +1475,19 @@ function canvasControls() {
   const end = (e) => { if (!drag) return; const d = drag; drag = null; if (!d.moved && e.type === 'pointerup') clickAt(e.clientX, e.clientY); };
   canvas.addEventListener('pointerup', end); canvas.addEventListener('pointercancel', end);
   canvas.addEventListener('dblclick', (e) => { const p = planeAt(e.clientX, e.clientY); if (p) lockOn(p); });
-  canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoomFly(Math.exp(clamp(e.deltaY, -200, 200) * 0.0015)); }, { passive: false });
+  // A Magic Mouse or a trackpad sends small scroll events when a finger only brushes it while the mouse moves. Those used to start fly mode,
+  // so the camera stopped touring whenever the mouse was moved. Now the scroll has to add up to a real turn of the wheel (WHEEL_TAKE
+  // within half a second) before it takes the controls; once flying, every scroll zooms as before.
+  const wheelRecent = [];   // [time, size] of wheel turns in the last half second, while not flying
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault(); const t = nowS(), d = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+    if (shot.kind !== 'fly') {   // only a real zoom takes the controls: turns that add up past WHEEL_TAKE within one half second
+      wheelRecent.push([t, Math.abs(d)]); while (wheelRecent.length && t - wheelRecent[0][0] > 0.5) wheelRecent.shift();
+      if (wheelRecent.reduce((sum, w) => sum + w[1], 0) < WHEEL_TAKE) return;
+      wheelRecent.length = 0;
+    }
+    zoomFly(Math.exp(clamp(d, -200, 200) * 0.0015));
+  }, { passive: false });
 }
 // ---------- help and search ----------
 const HELP = [
@@ -1409,6 +1507,7 @@ const HELP = [
   ['C', 'Captions on or off'],
   ['Shift and F', 'Fill the screen'],
   ['L', 'Listen to air traffic control near the view, on LiveATC.net'],
+  ['I', 'A photo of the aircraft in the caption, from Planespotters.net'],
   ['S', 'Open or close the settings'],
   ['H or ?', 'Show or hide this help'],
 ];
@@ -1420,7 +1519,7 @@ function fillKeys() {
 }
 function toggleHelp(on) { const h = $('help'), open = on === undefined ? h.hidden : on; h.hidden = !open; if (open) { held.clear(); closeFind(); closeMine(); document.body.classList.add('awake'); } }
 // Version 3.7.1: P opens a small window with just the viewer's places, the same list as "Center the sky on". One click moves the sky there.
-function openMine() {
+function openMine() { closePhoto();
   toggleHelp(false); closeFind(); document.body.classList.remove('panel'); held.clear(); document.body.classList.add('awake');
   renderMine(); $('mine').hidden = false;
   const first = $('mine-list').querySelector('button') || $('mine-close'); first.focus();
@@ -1443,7 +1542,7 @@ function renderMine() {
 }
 function closeMine() { const m = $('mine'); if (m.hidden) return; m.hidden = true; const ae = document.activeElement; if (ae && m.contains(ae) && ae.blur) ae.blur(); }
 let findSel = 0, findList = [], routesAsked = -1e9, findTimer = 0;
-function openFind() {
+function openFind() { closePhoto();
   toggleHelp(false); closeMine(); document.body.classList.remove('panel'); held.clear(); $('find').hidden = false; clearInterval(findTimer); findTimer = setInterval(() => { if (!$('find').hidden) renderFind(); }, 2000); $('find-q').value = ''; findSel = 0; renderFind(); $('find-q').focus();
   let n = 0; for (const p of planes.values()) if (p.lat !== null && !p.info && n++ < 40) dbLookup(p).then(() => { if (!$('find').hidden) renderFind(); }, () => {});
   prefetchRoutes().then(() => { if (!$('find').hidden) renderFind(); });
