@@ -469,6 +469,58 @@ const { chromium } = require('playwright');
   ok('ATRs, Dash 8s and Dorniers are twin turboprops with the wing on top; Saabs, the Brasilia and the Jetstream 41 have it below; King Airs have it below; the PC-12, TBM and Caravan are small planes; the Dornier 328JET keeps its jets', ['AT72', 'AT76', 'DH8D', 'D328'].every((t) => s311.kinds[t] === 'turbo') && ['SF34', 'SB20', 'E120', 'JS41'].every((t) => s311.kinds[t] === 'turbolow') && ['BE20', 'B350', 'BE9L'].every((t) => s311.kinds[t] === 'kingair') && ['PC12', 'TBM9', 'C208'].every((t) => s311.kinds[t] === 'light') && s311.kinds.J328 !== 'turbo', JSON.stringify(s311.kinds));
   ok('the twin turboprop has a propeller in front of each engine, its wing above the body, the Saab shape and the King Air their wing below', s311.turbo.propFront > 20 && s311.turbo.wingHi > 10 && s311.turbo.wingLo === 0 && s311.kingair.propFront > 20 && s311.kingair.wingLo > 10 && s311.kingair.wingHi === 0 && s311.kingair.len < s311.turbo.len && s311.turbolow.wingLo > 10 && s311.turbolow.wingHi === 0 && s311.turbolow.propFront > 20 && s311.turbolow.len === s311.turbo.len, JSON.stringify({ turbo: s311.turbo, turbolow: s311.turbolow, kingair: s311.kingair }));
   ok('the helicopter stands on skids and has a rotor on its tail', s311.heli.skid > 20 && s311.heli.tailRotor, JSON.stringify(s311.heli));
+  // ---------- version 3.12: the aircraft gallery, military paint and fun paint ----------
+  await page.keyboard.press('Escape'); await page.mouse.move(400, 300); await page.keyboard.press('g');
+  await page.waitForFunction(() => { const g = window.__sky.gallery; return g && g.isOpen && g.cards.length && g.cards.every((c) => c.drawn); }, null, { timeout: 20000 }).catch(() => {});
+  const gal = await page.evaluate(() => {
+    const s = window.__sky, g = s.gallery, kinds = g.cards.map((c) => c.kind), want = Object.keys(s.MODELS).concat('heavy2');
+    const lit = (cv) => { const x = cv.getContext('2d'), d = x.getImageData(0, 0, cv.width, cv.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++; return n; };
+    const f0 = s.renderer.info.render.frame;
+    return { open: g.isOpen, n: document.querySelectorAll('#gal-shapes figure').length, missing: want.filter((k) => kinds.indexOf(k) === -1), blank: g.cards.filter((c) => lit(c.cv) < 500).map((c) => c.kind), f0,
+      titles: [...document.querySelectorAll('#gal-shapes figcaption b')].map((b) => b.textContent) };
+  });
+  await page.waitForTimeout(600);
+  const galF1 = await page.evaluate(() => window.__sky.renderer.info.render.frame);
+  ok('G opens the gallery with a card for every shape the sky draws, each with a picture of the aircraft', gal.open && gal.n === 12 && gal.missing.length === 0 && gal.blank.length === 0, JSON.stringify(gal));
+  ok('while the gallery is open the sky behind it is not drawn', galF1 === gal.f0, gal.f0 + ' then ' + galF1);
+  await page.keyboard.press('s');
+  const galKeys = await page.evaluate(() => ({ panel: document.body.classList.contains('panel'), open: window.__sky.gallery.isOpen }));
+  ok('with the gallery open, other keys do nothing', !galKeys.panel && galKeys.open, JSON.stringify(galKeys));
+  await page.click('#gallery [data-tab="paint"]');
+  await page.waitForFunction(() => window.__sky.gallery.cards.slice(0, 4).every((c) => c.drawn), null, { timeout: 15000 }).catch(() => {});
+  const galPaint = await page.evaluate(() => {
+    const names = [...document.querySelectorAll('#gal-paint figcaption b')].map((b) => b.textContent), chips = document.querySelectorAll('#gal-paint .gchips span').length;
+    return { n: names.length, names, chips, heads: [...document.querySelectorAll('#gal-paint h2')].map((h) => h.textContent) };
+  });
+  ok('the paint page shows the airlines with their own paint, the regionals in their partner\'s paint, military aircraft, and the airlines known only by a tail colour',
+    galPaint.n > 50 && ['Delta Air Lines', 'Endeavor Air', 'Lufthansa', 'Military aircraft', 'Military helicopter'].every((n) => galPaint.names.indexOf(n) !== -1) && galPaint.chips > 20 && galPaint.heads.indexOf('Military') !== -1, JSON.stringify({ n: galPaint.n, chips: galPaint.chips, heads: galPaint.heads }));
+  await page.click('#gallery [data-tab="fun"]');
+  await page.click('#gal-fun button[data-fun="bee"]');
+  const fun = await page.evaluate(() => {
+    const s = window.__sky, unknown = s.paintFor('ZZZ999', 'abc001', 'jet', { fun: s.S.fun }), small = s.paintFor('N12345', 'abc002', 'light', { fun: s.S.fun }), delta = s.paintFor('DAL123', 'abc003', 'jet', { fun: s.S.fun }), deltaPlain = s.paintFor('DAL123', 'abc003', 'jet');
+    const mil = s.paintFor('RCH123', 'ae0001', 'heavy', { mil: true, fun: s.S.fun }), milHeli = s.paintFor('', 'ae0002', 'heli', { mil: true });
+    const saved = JSON.parse(localStorage.getItem('sky3d') || '{}').fun;
+    return { fun: s.S.fun, select: document.getElementById('f-fun').value, saved, inUse: document.querySelector('#gal-fun button[data-fun="bee"]').textContent, unknownTop: unknown[0], smallTop: small[0], deltaSame: JSON.stringify(delta) === JSON.stringify(deltaPlain), milTop: mil[0], milHeliTop: milHeli[0] };
+  });
+  ok('Use this on a fun paint sets it for aircraft with no airline paint, saves it and shows it in the settings; airline and military paint stay as they are',
+    fun.fun === 'bee' && fun.select === 'bee' && fun.saved === 'bee' && fun.inUse === 'In use' && fun.unknownTop === 0xffc400 && fun.smallTop === 0xffc400 && fun.deltaSame && fun.milTop === 0x6e757b && fun.milHeliTop === 0x4b5320, JSON.stringify(fun));
+  await page.keyboard.press('g');
+  const galShut = await page.evaluate(() => window.__sky.gallery.isOpen);
+  ok('G closes the gallery', !galShut);
+  // a military aircraft from the flight network, marked in its records, wears military grey in the sky; Escape also closes the gallery
+  const milSky = await page.evaluate(async () => {
+    const s = window.__sky; s.setFun('');
+    const near = s.pose; s.ingest([{ hex: 'ae0f01', flight: 'RCH871  ', t: 'C17', category: 'A5', dbFlags: 1, lat: near.lat + 0.05, lon: near.lon + 0.05, alt_baro: 18000, gs: 380, track: 90, seen: 0.1, seen_pos: 0.2 },
+      { hex: 'a0f002', flight: 'N55XY   ', t: 'C172', category: 'A1', dbFlags: 0, lat: near.lat - 0.05, lon: near.lon - 0.05, alt_baro: 3000, gs: 100, track: 90, seen: 0.1, seen_pos: 0.2 }], Date.now() / 1000, 2);
+    await new Promise((r) => setTimeout(r, 1500));
+    const m = s.planes.get('ae0f01'), c = s.planes.get('a0f002');
+    s.openGallery('shapes'); const opened = s.gallery.isOpen;
+    return { mil: m && m.mil, milPaint: m ? s.paintOf(m, s.modelFor(m.category, m.type))[0] : null, civ: c && c.mil, civPaint: c ? s.paintOf(c, 'light')[0] : null, drawn: !!(m && m.mesh), opened };
+  });
+  await page.keyboard.press('Escape');
+  const escShut = await page.evaluate(() => window.__sky.gallery.isOpen);
+  ok('an aircraft its records mark as military wears military grey in the sky; one not marked keeps its usual paint', milSky.mil === true && milSky.milPaint === 0x6e757b && milSky.drawn && milSky.civ === false && milSky.civPaint !== null && milSky.civPaint !== 0x6e757b, JSON.stringify(milSky));
+  ok('Escape closes the gallery', milSky.opened && !escShut);
   // ---------- version 3.9: the caption names both ends of the trip ----------
   const words = await page.evaluate(() => {
     const s = window.__sky, A = { name: 'Palm Beach International', location: 'West Palm Beach', iata: 'PBI', icao: 'KPBI', lat: 26.6832, lon: -80.0956 }, B = { name: 'Hartsfield Jackson Atlanta International', location: 'Atlanta', iata: 'ATL', icao: 'KATL', lat: 33.6367, lon: -84.4281 };
