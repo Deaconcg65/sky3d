@@ -648,6 +648,62 @@ const { chromium } = require('playwright');
   const healed = await holes();
   ok('once the outage is over, the missing photos fill in on their own', healed.holes === 0 && healed.loaded > part.loaded, JSON.stringify(healed));
   await satSome.close();
+  // ---------- version 3.12.1: the tour waits after the viewer takes over, for the time in the settings ----------
+  const hb = await browser.newPage({ viewport: { width: 960, height: 540 } }); hb.on('pageerror', (e) => errs.push('PAGEERROR (hand back): ' + e.message));
+  await hb.goto(PAGE + '&handBack=60'); await planesIn(hb);
+  const hbSet = await hb.evaluate(() => ({ S: window.__sky.S.handBack, sel: document.getElementById('f-handback').value, opts: [...document.getElementById('f-handback').options].map((o) => o.value).join(',') }));
+  ok('the settings offer a minute, 3 minutes, 5 minutes or never, and show the chosen wait', hbSet.S === 60 && hbSet.sel === '60' && hbSet.opts === '60,180,300,0', JSON.stringify(hbSet));
+  // a click on an aircraft while the tour runs holds the tour; once the wait is over (the clock is moved back here) it moves on again
+  const hbClick = await hb.evaluate(async () => {
+    const s = window.__sky; s.setFollow(''); s.autoTour();
+    const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.callsign()); if (!p) return { none: true };
+    const v = p.pos.clone().project(s.camera); s.clickAt((v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight);
+    const r = { clicked: s.clicked === p, took: s.tookOver > 0, held: s.hold(), owner: s.cameraOwner() };
+    s.tookOver -= 61; await new Promise((res) => setTimeout(res, 600)); r.after = s.tookOver; return r;
+  });
+  ok('a click on an aircraft holds the auto tour, and the hold ends after the chosen wait', hbClick.took && hbClick.owner === 'tour' && hbClick.held && hbClick.after === 0, JSON.stringify(hbClick));
+  // Escape after a click on an aircraft starts the tour again at once, also with Never
+  const hbEsc = await hb.evaluate(() => {
+    const s = window.__sky; s.S.handBack = 0; s.setFollow(''); s.autoTour();
+    const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.callsign()); if (!p) return { none: true };
+    const v = p.pos.clone().project(s.camera); s.clickAt((v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight);
+    return { took: s.tookOver > 0, held: s.hold() };
+  });
+  await hb.keyboard.press('Escape'); await hb.waitForTimeout(300);
+  Object.assign(hbEsc, await hb.evaluate(() => { const s = window.__sky; const r = { after: s.tookOver, heldAfter: s.hold(), owner: s.cameraOwner() }; s.S.handBack = 60; return r; }));
+  ok('Escape after a click on an aircraft starts the auto tour again at once', hbEsc.took && hbEsc.held && hbEsc.after === 0 && !hbEsc.heldAfter && hbEsc.owner === 'tour', JSON.stringify(hbEsc));
+  // a locked aircraft (double click or search) goes back to the tour after the wait; before 3.12.1 it stayed until the aircraft was gone
+  const hbLock = await hb.evaluate(async () => {
+    const s = window.__sky; s.setFollow(''); const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.callsign()); if (!p) return { none: true };
+    s.lockOn(p); await new Promise((res) => setTimeout(res, 600)); const r = { before: s.cameraOwner() };
+    s.tookOver -= 30; await new Promise((res) => setTimeout(res, 600)); r.half = s.cameraOwner();
+    s.tookOver -= 31; await new Promise((res) => setTimeout(res, 600)); r.after = s.cameraOwner(); r.took = s.tookOver; return r;
+  });
+  ok('a locked aircraft stays for the chosen wait, then the auto tour takes the camera back', hbLock.before === 'lock' && hbLock.half === 'lock' && hbLock.after === 'tour' && hbLock.took === 0, JSON.stringify(hbLock));
+  // flying: the wait counts from the last touch of the controls
+  const hbFly = await hb.evaluate(async () => {
+    const s = window.__sky; s.enterFly(); const r = { before: s.cameraOwner() };
+    s.fly.last -= 59; await new Promise((res) => setTimeout(res, 600)); r.half = s.cameraOwner();
+    s.fly.last -= 2; await new Promise((res) => setTimeout(res, 600)); r.after = s.cameraOwner(); return r;
+  });
+  ok('fly mode goes back to the auto tour after the chosen wait with no input', hbFly.before === 'fly' && hbFly.half === 'fly' && hbFly.after === 'tour', JSON.stringify(hbFly));
+  // Never: a locked aircraft and a click both keep the camera however long it has been; A hands it back at once
+  const hbNever = await hb.evaluate(async () => {
+    const s = window.__sky; s.S.handBack = 0; s.setFollow(''); const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.callsign()); if (!p) return { none: true };
+    s.lockOn(p); s.tookOver -= 3600; await new Promise((res) => setTimeout(res, 600)); const r = { lock: s.cameraOwner(), held: s.hold() };
+    s.autoTour(); r.afterA = s.cameraOwner(); r.took = s.tookOver; r.heldAfterA = s.hold(); s.S.handBack = 60; return r;
+  });
+  ok('with Never, a locked aircraft keeps the camera, and A starts the tour again at once', hbNever.lock === 'lock' && hbNever.held && hbNever.afterA === 'tour' && hbNever.took === 0, JSON.stringify(hbNever));
+  await hb.close();
+  // the old fly-only setting carries over: Never stays Never, any other choice becomes 3 minutes
+  const carried = [];
+  for (const old of [0, 30]) {
+    const mp = await browser.newPage({ viewport: { width: 640, height: 400 } }); mp.on('pageerror', (e) => errs.push('PAGEERROR (old setting): ' + e.message));
+    await mp.addInitScript((v) => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('sky3d', JSON.stringify({ flyBack: v })); sessionStorage.setItem('seeded', '1'); } }, old);
+    await mp.goto(PAGE); await mp.waitForFunction(() => window.__sky, null, { timeout: 30000 }).catch(() => {});
+    carried.push(await mp.evaluate(() => (window.__sky ? window.__sky.S.handBack : null))); await mp.close();
+  }
+  ok('the old fly mode wait carries over: Never stays Never, other choices become 3 minutes', carried[0] === 0 && carried[1] === 180, JSON.stringify(carried));
   console.log('errors:', errs.join(' ; ') || 'none');
   await browser.close();
 })();
