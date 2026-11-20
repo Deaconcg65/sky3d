@@ -662,6 +662,16 @@ const { chromium } = require('playwright');
     s.tookOver -= 61; await new Promise((res) => setTimeout(res, 600)); r.after = s.tookOver; return r;
   });
   ok('a click on an aircraft holds the auto tour, and the hold ends after the chosen wait', hbClick.took && hbClick.owner === 'tour' && hbClick.held && hbClick.after === 0, JSON.stringify(hbClick));
+  // Escape after a click on an aircraft starts the tour again at once, also with Never
+  const hbEsc = await hb.evaluate(() => {
+    const s = window.__sky; s.S.handBack = 0; s.setFollow(''); s.autoTour();
+    const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.callsign()); if (!p) return { none: true };
+    const v = p.pos.clone().project(s.camera); s.clickAt((v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight);
+    return { took: s.tookOver > 0, held: s.hold() };
+  });
+  await hb.keyboard.press('Escape'); await hb.waitForTimeout(300);
+  Object.assign(hbEsc, await hb.evaluate(() => { const s = window.__sky; const r = { after: s.tookOver, heldAfter: s.hold(), owner: s.cameraOwner() }; s.S.handBack = 60; return r; }));
+  ok('Escape after a click on an aircraft starts the auto tour again at once', hbEsc.took && hbEsc.held && hbEsc.after === 0 && !hbEsc.heldAfter && hbEsc.owner === 'tour', JSON.stringify(hbEsc));
   // a locked aircraft (double click or search) goes back to the tour after the wait; before 3.12.1 it stayed until the aircraft was gone
   const hbLock = await hb.evaluate(async () => {
     const s = window.__sky; s.setFollow(''); const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.callsign()); if (!p) return { none: true };

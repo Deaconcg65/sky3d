@@ -1492,7 +1492,7 @@ function escapeKey() {
   else if (!$('mine').hidden) closeMine();
   else if (document.body.classList.contains('panel')) togglePanel(false);
   else if (cameraOwner() === 'fly' || cameraOwner() === 'lock') leaveControls();
-  else if (clicked) clickUntil = 0;
+  else if (clicked || tookOver) { clickUntil = 0; tookOver = 0; }   // version 3.12.1: Escape after a click also starts the tour again at once
 }
 // ---------- the mouse: drag to look around, wheel to zoom, click for details, double click to stay with an aircraft ----------
 function canvasControls() {
