@@ -12,6 +12,11 @@ const { chromium } = require('playwright');
   await page.goto(PAGE);
   const kind = () => page.evaluate(() => window.__sky.shot.kind);
   const ok = (label, cond, extra = '') => console.log((cond ? 'PASS ' : 'FAIL ') + label + (extra ? '  ' + extra : ''));
+  // a newly opened page needs its first aircraft before a check can pick one: wait for them rather than a fixed time, because a
+  // slower computer can take longer than five seconds to load the page and hear from the simulated networks
+  const planesIn = (pg, shown = true) => pg.waitForFunction((v) => { const s = window.__sky; return s && [...s.planes.values()].some((q) => q.lat !== null && q.callsign() && (!v || q.opacity > 0.5)); }, shown, { timeout: 30000 }).catch(() => {});
+  // pick an aircraft to lock on to, and lock on only if there is one, so a page with no aircraft fails its check instead of stopping the run
+  const lockAny = (pg) => pg.evaluate(() => { const s = window.__sky; s.setFollow(''); const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.callsign()); if (p) s.lockOn(p); return !!p; });
   await page.waitForTimeout(7000);
   // 1. fly heading at four orbit angles
   await page.keyboard.press('f'); await page.waitForTimeout(300);
@@ -260,7 +265,7 @@ const { chromium } = require('playwright');
   ok('a flight number that flies out and back shows the leg the aircraft is on, and never the same airport at both ends', loops.out === 'KLGA-KXNA' && loops.back === 'KXNA-KLGA' && loops.sideways === 'none' && loops.climbing === 'KLGA-KXNA' && loops.landing === 'KXNA-KLGA' && loops.same === 'none', JSON.stringify(loops));
   // the first route service does not know a flight: the second one is asked, so its origin can still be shown
   const rtab = await browser.newPage({ viewport: { width: 640, height: 360 } }); rtab.on('pageerror', (e) => errs.push('PAGEERROR (two route services): ' + e.message));
-  await rtab.goto(PAGE.replace('routeApi=/mock/routeset', 'routeApi=/mock/routeset-none,/mock/routeset')); await rtab.waitForTimeout(5000);
+  await rtab.goto(PAGE.replace('routeApi=/mock/routeset', 'routeApi=/mock/routeset-none,/mock/routeset')); await planesIn(rtab, false); await rtab.waitForTimeout(1000);
   const asked = await rtab.evaluate(async () => {
     const s = window.__sky; await s.prefetchRoutes(); const pre = [...s.routes.values()].filter((c) => c.route).length;
     const p = [...s.planes.values()].find((q) => s.routes.get(q.callsign()) && s.routes.get(q.callsign()).route); s.routes.clear();
@@ -551,8 +556,8 @@ const { chromium } = require('playwright');
   ok('a regional airline that flies for several partners is named from its flight number where that is known (RPA 4466 LGA to BOS and RPA 4555 are American; Mesa, part of Republic, is always United), then for the one whose hub is on its route, and otherwise flies for a partner', regional.rpaBos === 'DAL' && regional.rpaNone === 'some' && regional.rpaLga === 'some' && regional.rpa4466 === 'AAL' && regional.rpa4466n === 'AAL' && regional.rpa4555 === 'AAL' && regional.ash === 'UAL' && regional.ash4400 === 'UAL' && regional.skwDen === 'UAL' && regional.skwSea === 'some' && regional.edv === 'DAL' && regional.qxe === 'ASA' && regional.dal === 'own' && regional.tail === 'own', JSON.stringify(regional));
   // ---------- version 3.11: a photo of the aircraft in the caption, from Planespotters.net ----------
   const ph = await browser.newPage({ viewport: { width: 960, height: 540 } }); ph.on('pageerror', (e) => errs.push('PAGEERROR (photos): ' + e.message));
-  await ph.goto(PAGE + '&photoApi=/mock/photos/'); await ph.waitForTimeout(5000);
-  await ph.evaluate(() => { const s = window.__sky; s.setFollow(''); const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.callsign()); s.lockOn(p); });
+  await ph.goto(PAGE + '&photoApi=/mock/photos/'); await planesIn(ph);
+  await lockAny(ph);
   await ph.waitForFunction(() => document.getElementById('cap').classList.contains('on'), null, { timeout: 15000 }).catch(() => {});
   const btnShown = await ph.evaluate(() => !document.getElementById('photobtn').hidden && document.body.classList.contains('hasphoto'));
   await ph.keyboard.press('i');
@@ -571,7 +576,7 @@ const { chromium } = require('playwright');
   await ph.close();
   // the network edition with a relay asks the relay for photos, not Planespotters directly
   await sim('/ctl/photoasks?reset=1');
-  await rel.evaluate(() => { const s = window.__sky; s.setFollow(''); const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.callsign()); s.lockOn(p); });
+  await planesIn(rel); await lockAny(rel);
   await rel.waitForFunction(() => document.getElementById('cap').classList.contains('on'), null, { timeout: 15000 }).catch(() => {});
   await rel.keyboard.press('i');
   await rel.waitForFunction(() => !document.getElementById('photo-credit').hidden, null, { timeout: 10000 }).catch(() => {});
