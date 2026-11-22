@@ -14,6 +14,14 @@ Read BUILD-NOTES.md first. It records what is done, what is left in order, the d
 - Fly mode uses the camera's real heading, the negative of its orbit angle. The tour code still uses the orbit angle directly and was left unchanged.
 - Touch input is not designed in yet.
 
+## The LED flight board (board/)
+
+- board/CIRCUITPY runs on CircuitPython 9 or later on an Adafruit Matrix Portal S3, not on a computer: no os.path, no bisect, no thousands separator in format, no str.title. sky/logic.py and sky/web.py must stay free of hardware modules so tools/board_test.py can run them.
+- Anything merged to main reaches every board within the hour through the updater. Treat board/CIRCUITPY/manifest.json, sky/logic.py safe_path and plan_update, and boot.py as the safety boundary: a list must never be able to replace boot.py or the owner's config.json, write outside the drive, or leave the board with half an update.
+- boot.py is never updated over the air on purpose, so a mistake in it cannot be fixed remotely. Flag anything in it that could fail.
+- The board's settings (Wi-Fi password, location) stay on the board in config.json and must never be sent anywhere.
+- The lib/ files are Adafruit's, copied unchanged; do not review them.
+
 ## Review guidelines
 
 - Point out real bugs, security problems, and regressions in behavior described in BUILD-NOTES.md.

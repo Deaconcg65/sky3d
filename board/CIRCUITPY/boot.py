@@ -1,0 +1,106 @@
+# Runs once when the board powers up, before code.py. This file is never changed by the board's updates.
+#
+# Normally the board keeps its own drive, so it can save its settings and install updates; a computer then sees the
+# drive as read-only. Hold the Down button while plugging the board in to give the drive to the computer instead,
+# for copying files onto it.
+import board
+import digitalio
+import os
+import storage
+
+down = digitalio.DigitalInOut(board.BUTTON_DOWN)
+down.switch_to_input(pull=digitalio.Pull.UP)
+to_computer = not down.value
+down.deinit()
+
+if not to_computer:
+    storage.remount('/', readonly=False)
+
+
+def plain(path):
+    # the same rule the updater uses (sky/logic.py, safe_path), written out here because this file never changes;
+    # manifest.json is allowed here because the update itself replaces it
+    ok = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-./'
+    if not 0 < len(path) <= 80 or any(c not in ok for c in path):
+        return False
+    parts = path.split('/')
+    if len(parts) > 3 or any(p in ('', '.', '..') or p.startswith('.') for p in parts):
+        return False
+    if path in ('boot.py', 'code.py', 'config.json', 'settings.toml', 'update.todo', 'update.trial'):
+        return False
+    return not (path.endswith('.new') or path.endswith('.old'))
+
+
+def there(path):
+    try:
+        os.stat('/' + path)
+        return True
+    except OSError:
+        return False
+
+
+def gone(path):
+    try:
+        os.remove('/' + path)
+    except OSError:
+        pass
+
+
+def move(a, b):
+    gone(b)
+    if there(a):
+        os.rename('/' + a, '/' + b)
+
+
+def read_list(name):
+    try:
+        with open('/' + name) as f:
+            return [line.strip().split(' ', 1) for line in f if line.strip()]
+    except OSError:
+        return []
+
+
+if not to_computer:
+    # 1. Finish an update that the board downloaded before it restarted. Each new file sits beside the old one with
+    # ".new" on its name, and update.todo lists them. The old files are kept with ".old" on their names, and
+    # update.trial lists them, until the new version has run for ten minutes (sky/app.py then clears them).
+    todo = read_list('update.todo')
+    if todo:
+        good = all(len(t) == 2 and t[0] in ('put', 'del') and plain(t[1]) for t in todo)
+        good = good and all(there(t[1] + '.new') for t in todo if t[0] == 'put')
+        if good:
+            for t in todo:
+                move(t[1], t[1] + '.old')
+                if t[0] == 'put':
+                    move(t[1] + '.new', t[1])
+            with open('/update.trial', 'w') as f:
+                f.write('0\n')
+                for t in todo:
+                    f.write('%s %s\n' % (t[0], t[1]))
+        else:
+            for t in todo:
+                if len(t) == 2 and plain(t[1]):
+                    gone(t[1] + '.new')
+        gone('update.todo')
+
+    # 2. An update on trial: count this start. After three starts that each stopped before ten minutes, put the
+    # earlier version back, and keep the update list that failed so the board does not fetch it again.
+    trial = read_list('update.trial')
+    if trial:
+        try:
+            starts = int(trial[0][0]) + 1
+        except (ValueError, IndexError):
+            starts = 99
+        steps = [t for t in trial[1:] if len(t) == 2 and plain(t[1])]
+        if starts > 3:
+            move('manifest.json', 'manifest.refused')
+            for t in steps:
+                if t[0] == 'put':
+                    gone(t[1])
+                move(t[1] + '.old', t[1])
+            gone('update.trial')
+        else:
+            with open('/update.trial', 'w') as f:
+                f.write('%d\n' % starts)
+                for t in steps:
+                    f.write('%s %s\n' % (t[0], t[1]))
