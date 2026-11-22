@@ -52,9 +52,13 @@ def _text(v, most):
     return out[:most]
 
 
+STALE_SECONDS = 60   # an aircraft whose last position is older than this is not shown
+
+
 def planes_from(data, lat, lon):
     """The aircraft in one answer from a network or an antenna, closest first. Networks list them under "ac", an
-    antenna under "aircraft". Aircraft with no position are left out. Text is limited to plain characters."""
+    antenna under "aircraft". Aircraft with no position, or a position older than a minute, are left out. Text is
+    limited to plain characters."""
     if not isinstance(data, dict):
         return []
     rows = data.get('ac')
@@ -69,6 +73,9 @@ def planes_from(data, lat, lon):
         la, lo = _num(a.get('lat')), _num(a.get('lon'))
         if la is None or lo is None or abs(la) > 90 or abs(lo) > 180:
             continue
+        age = _num(a.get('seen_pos'))
+        if age is not None and age > STALE_SECONDS:
+            continue   # its position is old: it has likely gone, and must not hold the overhead screen
         alt = a.get('alt_baro')
         ground = alt == 'ground'
         alt = _num(alt)

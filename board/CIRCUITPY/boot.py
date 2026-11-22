@@ -73,6 +73,10 @@ def read_list(name):
     lines = whole_list(name)
     if lines is None:
         lines = whole_list(name + '.new')   # the power went just after the old list was cleared
+        if lines is not None:
+            # put that whole copy in its place first, so the next write to name.new cannot spoil the only copy
+            gone(name)
+            rename(name + '.new', name)
     return lines or []
 
 

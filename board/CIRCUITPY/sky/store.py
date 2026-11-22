@@ -97,6 +97,10 @@ def read_list(path):
         except (OSError, ValueError):
             continue
         if lines and lines[-1] == ['end']:
+            if p != path:
+                # put that whole copy in its place first, so the next write beside it cannot spoil the only copy
+                remove(path)
+                os.rename(p, path)
             return lines[:-1]
     return []
 

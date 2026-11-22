@@ -66,6 +66,10 @@ check([p['hex'] for p in ps] == ['ab0001', 'ab12cd', 'ab0002', 'ab0004'], 'fligh
 check(ps[1]['flight'] == 'DAL1234' and ps[1]['miles'] < 1.0, 'callsign trimmed and distance worked out')
 check(ps[0]['ground'] and ps[0]['alt'] is None, 'an aircraft on the ground has no height')
 check(logic.planes_from({'aircraft': data['ac']}, *home) == ps, "an antenna's list reads the same way")
+stale = {'ac': [{'hex': 'abc123', 'lat': home[0], 'lon': home[1], 'alt_baro': 3000, 'seen_pos': 300},
+                 {'hex': 'abc124', 'lat': home[0], 'lon': home[1], 'alt_baro': 3000, 'seen_pos': 2.5}]}
+check([p['hex'] for p in logic.planes_from(stale, *home)] == ['abc124'],
+      'an aircraft whose position is minutes old is left out, so it cannot hold the overhead screen')
 check(logic.planes_from('nonsense', *home) == [] and logic.planes_from({'ac': 5}, *home) == [], 'junk is ignored')
 check([p['hex'] for p in logic.nearby(ps)] == ['ab12cd', 'ab0002'], 'nearby skips the ground and beyond 10 miles')
 check(abs(logic.miles_between(28.4312, -81.3081, 33.6407, -84.4277) - 404) < 5, 'MCO to ATL is about 404 miles')
@@ -424,6 +428,32 @@ for which in range(5):   # the start that loses power: the swap, the three that 
                     leftovers(drive)))
 check(whole and tried > 50, 'a power cut at any step of any start on trial still ends with the earlier version back')
 
+whole, tried = True, 0
+for which in range(5):   # two power cuts in a row: one start, then the very next start, each cut at any step
+    for cut in range(0, 200):
+        for cut2 in range(0, 200):
+            with tempfile.TemporaryDirectory() as drive:
+                staged(drive)
+                for _ in range(which):
+                    run_boot(drive)
+                if not run_boot(drive, cut_after=cut):
+                    break
+                if not run_boot(drive, cut_after=cut2):
+                    break
+                tried += 1
+                for _ in range(6):
+                    run_boot(drive)
+                if ({k: read(drive, k) for k in OLD} != OLD or read(drive, 'manifest.refused') != 'new list' or
+                        leftovers(drive)):
+                    whole = False
+                    print('      power cuts on start %d after %d then %d steps left %r, lists %r' % (
+                        which + 1, cut, cut2, {k: read(drive, k) for k in OLD}, leftovers(drive)))
+        else:
+            continue
+        if cut2 == 0:
+            break
+check(whole and tried > 500, 'two power cuts in a row, at any steps, still end with the earlier version back')
+
 
 def store_on(drive, cut_after=None):
     """Point sky/store.py at a stand-in drive, losing power after cut_after removals, renames or writes."""
@@ -482,7 +512,12 @@ for which in range(3):   # the start on which the new version reaches ten good m
             except PowerCut:
                 pass
             tried += 1
-            marked = store.read_list(store.TRIAL)[:1] == [['worked']]
+            def whole_text(n):
+                t = read(drive, n) or ''
+                return t if t.endswith('end\n') else None
+            # the mark counts once it is the list boot.py will read: in place, or the only whole copy
+            mark = whole_text('update.trial') or whole_text('update.trial.new') or ''
+            marked = mark.startswith('worked\n')
             run_boot(drive)
             store_on(drive)
             store.update_worked()   # the next start that runs ten good minutes

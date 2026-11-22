@@ -37,9 +37,9 @@
    "size": 5025
   },
   "sky/logic.py": {
-   "sha": "88136cd08fd80c27d50c870b2439d5cbd3474f6eac9c4f7d5e9e2956f01a6782",
-   "sha1": "ca218225d8082c9a6b4863654ba443a33fadde27",
-   "size": 22079
+   "sha": "1fc97bdd83690521f6d148661a3c59d9cbc1c7e501cb4d4660eda7f986afe7db",
+   "sha1": "3aadfe778bda73dcc3b2e51c05e7be6ac45f9822",
+   "size": 22402
   },
   "sky/net.py": {
    "sha": "e655deb8501d703bf13945b67061c006d20234cb3b5b32738c4fbc68b4350963",
@@ -57,9 +57,9 @@
    "size": 2805
   },
   "sky/store.py": {
-   "sha": "ac599bf12a13b3aea5144e83b0673660c2929a4fd7cbda8e3481ce0ffc7a964a",
-   "sha1": "47b8600424516339a23b20ded51547c43f9c1e09",
-   "size": 3872
+   "sha": "5bbc355aceed08e91cbbf36e4ec8c4279ea7fda6e5ce198665d018d2a928ec95",
+   "sha1": "069ea46c4363069791f6962ae5e65ebe193313a3",
+   "size": 4075
   },
   "sky/web.py": {
    "sha": "499636efa9dc066980c788cf0108549c9611fead1455fea73ab97fafc36a83fb",
