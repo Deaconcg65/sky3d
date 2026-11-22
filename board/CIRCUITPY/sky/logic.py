@@ -437,8 +437,8 @@ def find_zip(f, size, zipcode):
 # ---------- updates ----------
 
 SAFE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-./'
-NEVER_UPDATED = ('boot.py', 'code.py', 'config.json', 'manifest.json', 'manifest.refused', 'settings.toml',
-                 'update.todo', 'update.trial', 'update.swap')
+NEVER_UPDATED = ('boot.py', 'code.py', 'config.json', 'config.json.tmp', 'manifest.json', 'manifest.refused',
+                 'settings.toml', 'update.todo', 'update.trial', 'update.swap')
 
 
 def safe_path(path):

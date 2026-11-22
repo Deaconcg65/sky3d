@@ -175,7 +175,7 @@ with open(zips, 'rb') as f:
 # ---------- updates ----------
 check(logic.safe_path('sky/app.py') and logic.safe_path('sky/logic.py') and logic.safe_path('lib/a/b.py'),
       'plain board paths may be updated')
-for bad in ('boot.py', 'code.py', 'config.json', 'manifest.json', 'update.trial', 'x.py.old', '../x.py', 'sky/../boot.py', '/code.py', '.hidden',
+for bad in ('boot.py', 'code.py', 'config.json', 'config.json.tmp', 'manifest.json', 'update.trial', 'x.py.old', '../x.py', 'sky/../boot.py', '/code.py', '.hidden',
             'sky/.x', 'a/b/c/d.py', 'x.py.new', 'sky//x.py', 'sp ace.py', 'x\\y.py', '', 'a' * 81,
             'BOOT.py', 'Boot.PY', 'CONFIG.JSON', 'Code.py', 'x.py.NEW', 'x.py.Old', 'UPDATE.TRIAL', 'update.swap'):
     check(not logic.safe_path(bad), 'never updated: ' + repr(bad[:20]))
@@ -419,6 +419,88 @@ for which in range(5):   # the start that loses power: the swap, the three that 
                     which + 1, cut, {k: read(drive, k) for k in OLD}, read(drive, 'manifest.refused'),
                     leftovers(drive)))
 check(whole and tried > 50, 'a power cut at any step of any start on trial still ends with the earlier version back')
+
+
+def store_on(drive, cut_after=None):
+    """Point sky/store.py at a stand-in drive, losing power after cut_after removals, renames or writes."""
+    steps = [0]
+
+    def at(p):
+        return os.path.join(drive, p.lstrip('/'))
+
+    def step():
+        if cut_after is not None and steps[0] >= cut_after:
+            raise PowerCut()
+        steps[0] += 1
+
+    def remove(p):
+        if os.path.exists(at(p)):
+            step()
+        os.remove(at(p))
+
+    def rename(a, b):
+        step()
+        os.rename(at(a), at(b))
+
+    class Cutting:
+        def __init__(self, f):
+            self.f = f
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.f.close()
+
+        def write(self, text):
+            step()
+            self.f.write(text)
+
+    def opener(p, mode='r', *a, **k):
+        f = open(at(p), mode, *a, **k)
+        return Cutting(f) if 'w' in mode else f
+
+    store.open = opener
+    store.os = types.SimpleNamespace(remove=remove, rename=rename, stat=lambda p: os.stat(at(p)))
+
+
+whole, tried = True, 0
+for which in range(3):   # the start on which the new version reaches ten good minutes
+    for cut in range(0, 200):
+        with tempfile.TemporaryDirectory() as drive:
+            staged(drive)
+            for _ in range(which + 1):
+                run_boot(drive)
+            store_on(drive, cut)
+            try:
+                store.update_worked()
+                break
+            except PowerCut:
+                pass
+            tried += 1
+            marked = store.read_list(store.TRIAL)[:1] == [['worked']]
+            run_boot(drive)
+            store_on(drive)
+            store.update_worked()   # the next start that runs ten good minutes
+            for _ in range(4):
+                run_boot(drive)
+            now = {k: read(drive, k) for k in NEW}
+            olds = [k for k in NEW if read(drive, k + '.old') is not None]
+            if now not in (NEW, OLD) or (marked and now != NEW) or olds or leftovers(drive):
+                whole = False
+                print('      power cut on start %d after %d steps of clearing left %r, old %r, lists %r' % (
+                    which + 1, cut, {k: read(drive, k) for k in NEW}, olds, leftovers(drive)))
+check(whole and tried > 3, 'a power cut while clearing away the earlier version never leaves a mix or takes it back')
+
+with tempfile.TemporaryDirectory() as drive:
+    store_on(drive)
+    write(drive, 'config.json.tmp', json.dumps({'ssid': 'Home', 'lat': 28.5, 'lon': -81.4}))
+    check((store.load_config() or {}).get('ssid') == 'Home', 'settings saved just as the power went are found')
+    write(drive, 'config.json', json.dumps({'ssid': 'Old', 'lat': 1, 'lon': 2}))
+    write(drive, 'config.json.tmp', '{"ssid": "Ha')
+    check((store.load_config() or {}).get('ssid') == 'Old', 'a half-written spare copy leaves the settings alone')
+    store.save_config({'ssid': 'New', 'lat': 1, 'lon': 2})
+    check(store.load_config()['ssid'] == 'New' and read(drive, 'config.json.tmp') is None, 'settings are saved')
 
 with tempfile.TemporaryDirectory() as drive:
     staged(drive)

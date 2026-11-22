@@ -14,11 +14,14 @@ TODO = '/update.todo'
 
 
 def load_config():
-    try:
-        with open(CONFIG) as f:
-            c = json.load(f)
-    except (OSError, ValueError):
-        return None
+    c = None
+    for path in (CONFIG, CONFIG + '.tmp'):   # the spare copy is the settings when the power went mid-save
+        try:
+            with open(path) as f:
+                c = json.load(f)
+            break
+        except (OSError, ValueError):
+            pass
     if not isinstance(c, dict) or not isinstance(c.get('ssid'), str) or not c['ssid']:
         return None
     if not all(isinstance(c.get(k), (int, float)) for k in ('lat', 'lon')):
@@ -109,8 +112,14 @@ def write_list(path, lines):
 
 
 def update_worked():
-    """The new version has run long enough: forget the earlier one that boot.py kept in case it had to come back."""
+    """The new version has run long enough: forget the earlier one that boot.py kept in case it had to come back.
+    The trial list is first marked "worked", before any earlier file goes, so a power cut part way through never
+    leads boot.py to take back an update that is already half cleared away; boot.py finishes the clearing instead."""
     lines = read_list(TRIAL)
+    if not lines:
+        return
+    if lines[0] != ['worked']:
+        write_list(TRIAL, ['worked'] + ['%s %s' % (t[0], t[1]) for t in lines[1:] if len(t) == 2])
     for t in lines[1:]:
         if len(t) == 2 and (t[1] == 'manifest.json' or logic.safe_path(t[1])):
             remove('/' + t[1] + '.old')

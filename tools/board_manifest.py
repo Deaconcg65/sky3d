@@ -14,7 +14,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..', 'board', 'CIRCUITPY'))
-SKIP = ('boot.py', 'code.py', 'manifest.json', 'manifest.refused', 'config.json', 'settings.toml')
+SKIP = ('boot.py', 'code.py', 'manifest.json', 'manifest.refused', 'config.json', 'config.json.tmp', 'settings.toml')
 
 
 def listing():

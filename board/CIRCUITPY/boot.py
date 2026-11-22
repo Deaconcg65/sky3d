@@ -27,7 +27,8 @@ def plain(path):
     if len(parts) > 3 or any(p in ('', '.', '..') or p.startswith('.') for p in parts):
         return False
     low = path.lower()   # the drive does not tell BOOT.PY from boot.py
-    if low in ('boot.py', 'code.py', 'config.json', 'settings.toml', 'update.todo', 'update.trial', 'update.swap'):
+    if low in ('boot.py', 'code.py', 'config.json', 'config.json.tmp', 'settings.toml', 'manifest.refused',
+               'update.todo', 'update.trial', 'update.swap'):
         return False
     return not (low.endswith('.new') or low.endswith('.old'))
 
@@ -139,7 +140,14 @@ if not to_computer:
     # taking it back can run again too: a file is only replaced while its ".old" copy is still there, and
     # update.trial goes only once every step is done, so a power cut here is finished at the next start.
     trial = read_list('update.trial')
-    if trial:
+    if trial and trial[0] == ['worked']:
+        # the new version proved itself and sky/app.py was clearing the earlier one away when the power went:
+        # finish that, and never take this update back
+        for t in trial[1:]:
+            if len(t) == 2 and t[0] in ('put', 'add', 'del') and plain(t[1]):
+                gone(t[1] + '.old')
+        drop_list('update.trial')
+    elif trial:
         try:
             starts = int(trial[0][0]) + 1
         except (ValueError, IndexError):
