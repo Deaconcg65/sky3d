@@ -228,12 +228,8 @@ class Net:
             done.append(path)
         with open('/manifest.json.new', 'w') as f:
             json.dump(remote, f)
-        with open('/update.todo', 'w') as f:
-            for p in done:
-                f.write('put %s\n' % p)
-            for p in remove:
-                f.write('del %s\n' % p)
-            f.write('put manifest.json\n')
+        store.write_list(store.TODO, ['put ' + p for p in done] + ['del ' + p for p in remove] +
+                         ['put manifest.json'])
         return True
 
     def _download(self, path, sha, size, sha1):

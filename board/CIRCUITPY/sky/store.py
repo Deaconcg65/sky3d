@@ -10,6 +10,7 @@ ZIPS = '/zips.bin'
 MANIFEST = '/manifest.json'
 REFUSED = '/manifest.refused'
 TRIAL = '/update.trial'
+TODO = '/update.todo'
 
 
 def load_config():
@@ -82,22 +83,46 @@ def remove(path):
         pass
 
 
+def read_list(path):
+    """Read one of the update lists, which end with a line "end" so a half-written one is never trusted (boot.py
+    reads them the same way). When the power went between clearing a list and putting its new copy in place, the
+    copy beside it with ".new" on its name is the list."""
+    for p in (path, path + '.new'):
+        try:
+            with open(p) as f:
+                lines = [line.strip().split(' ', 1) for line in f if line.strip()]
+        except (OSError, ValueError):
+            continue
+        if lines and lines[-1] == ['end']:
+            return lines[:-1]
+    return []
+
+
+def write_list(path, lines):
+    """Write an update list whole beside its place, then put it there."""
+    with open(path + '.new', 'w') as f:
+        for line in lines:
+            f.write(line + '\n')
+        f.write('end\n')
+    remove(path)
+    os.rename(path + '.new', path)
+
+
 def update_worked():
     """The new version has run long enough: forget the earlier one that boot.py kept in case it had to come back."""
-    try:
-        with open(TRIAL) as f:
-            lines = [line.strip().split(' ', 1) for line in f if line.strip()]
-    except OSError:
-        return
+    lines = read_list(TRIAL)
     for t in lines[1:]:
         if len(t) == 2 and (t[1] == 'manifest.json' or logic.safe_path(t[1])):
             remove('/' + t[1] + '.old')
     remove(TRIAL)
+    remove(TRIAL + '.new')
 
 
 def update_on_trial():
-    try:
-        os.stat(TRIAL)
-        return True
-    except OSError:
-        return False
+    for p in (TRIAL, TRIAL + '.new'):
+        try:
+            os.stat(p)
+            return True
+        except OSError:
+            pass
+    return False

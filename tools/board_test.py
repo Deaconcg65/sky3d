@@ -223,21 +223,51 @@ class PowerCut(Exception):
 
 
 def run_boot(drive, down_held=False, cut_after=None):
-    """Run boot.py against a stand-in drive. cut_after stops it, as a power cut would, after that many renames."""
+    """Run boot.py against a stand-in drive. cut_after stops it, as a power cut would, after that many steps on the
+    drive, where a step is a rename, a removal or one write into a file (which stays half written)."""
     real = os
-    renames = [0]
+    steps = [0]
+
+    def step():
+        if cut_after is not None and steps[0] >= cut_after:
+            raise PowerCut()
+        steps[0] += 1
 
     def rename(a, b):
-        if cut_after is not None and renames[0] >= cut_after:
-            raise PowerCut()
-        renames[0] += 1
+        step()
         real.rename(at(a), at(b))
+
+    def remove(p):
+        if real.path.exists(at(p)):
+            step()
+        real.remove(at(p))
+
+    class Cutting:
+        def __init__(self, f):
+            self.f = f
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.f.close()
+
+        def write(self, text):
+            step()
+            self.f.write(text)
+
+        def __iter__(self):
+            return iter(self.f)
+
+    def opener(p, mode='r', *a, **k):
+        f = open(at(p), mode, *a, **k)
+        return Cutting(f) if 'w' in mode else f
 
     def at(p):
         return real.path.join(drive, p.lstrip('/'))
 
     fake_os = types.SimpleNamespace(
-        remove=lambda p: real.remove(at(p)), rename=rename,
+        remove=remove, rename=rename,
         stat=lambda p: real.stat(at(p)))
     pin = types.SimpleNamespace(value=not down_held, switch_to_input=lambda pull=None: None, deinit=lambda: None)
     mods = {'board': types.SimpleNamespace(BUTTON_DOWN=1),
@@ -246,9 +276,9 @@ def run_boot(drive, down_held=False, cut_after=None):
     saved = {k: sys.modules.get(k) for k in mods}
     sys.modules.update(mods)
     try:
-        exec(compile(tree, 'boot.py', 'exec'), {'open': lambda p, *a, **k: open(at(p), *a, **k), '__name__': 'boot'})
+        exec(compile(tree, 'boot.py', 'exec'), {'open': opener, '__name__': 'boot'})
     except PowerCut:
-        pass
+        return True
     finally:
         for k, v in saved.items():
             if v is None:
@@ -279,7 +309,7 @@ with tempfile.TemporaryDirectory() as drive:
     write(drive, 'sky/app.py.new', 'new')
     write(drive, 'sky/added.py.new', 'added')
     write(drive, 'manifest.json.new', 'new list')
-    write(drive, 'update.todo', 'put sky/app.py\nput sky/added.py\ndel sky/gone.py\nput manifest.json\n')
+    write(drive, 'update.todo', 'put sky/app.py\nput sky/added.py\ndel sky/gone.py\nput manifest.json\nend\n')
     run_boot(drive)
     check(read(drive, 'sky/app.py') == 'new' and read(drive, 'sky/added.py') == 'added' and
           read(drive, 'sky/app.py.new') is None, 'boot.py swaps in the new files')
@@ -301,7 +331,7 @@ with tempfile.TemporaryDirectory() as drive:
     write(drive, 'sky/app.py', 'old')
     write(drive, 'sky/app.py.new', 'new')
     write(drive, 'manifest.json.new', 'new list')
-    write(drive, 'update.todo', 'put sky/app.py\nput manifest.json\n')
+    write(drive, 'update.todo', 'put sky/app.py\nput manifest.json\nend\n')
     run_boot(drive)
     sys.modules.pop('sky.store', None)
     from sky import store   # noqa: E402
@@ -309,7 +339,9 @@ with tempfile.TemporaryDirectory() as drive:
     real_open, real_remove, real_stat = open, os.remove, os.stat
     store.open = lambda p, *a, **k: real_open(os.path.join(drive, p.lstrip('/')), *a, **k)
     store.os = types.SimpleNamespace(remove=lambda p: real_remove(os.path.join(drive, p.lstrip('/'))),
-                                     stat=lambda p: real_stat(os.path.join(drive, p.lstrip('/'))))
+                                     stat=lambda p: real_stat(os.path.join(drive, p.lstrip('/'))),
+                                     rename=lambda p, q: os.rename(os.path.join(drive, p.lstrip('/')),
+                                                                   os.path.join(drive, q.lstrip('/'))))
     check(store.update_on_trial(), 'the program can tell an update is on trial')
     store.update_worked()
     check(read(drive, 'sky/app.py.old') is None and read(drive, 'manifest.json.old') is None and
@@ -317,12 +349,17 @@ with tempfile.TemporaryDirectory() as drive:
     check(not store.update_on_trial(), 'and the next update may come')
     run_boot(drive)
     check(read(drive, 'sky/app.py') == 'new', 'a version that proved itself stays')
+    write(drive, 'sky/app.py.new', 'newer')
+    store.write_list(store.TODO, ['put sky/app.py'])
+    run_boot(drive)
+    check(read(drive, 'sky/app.py') == 'newer' and store.update_on_trial(),
+          'the list the updater writes is the one boot.py reads')
 
 with tempfile.TemporaryDirectory() as drive:
     write(drive, 'sky/app.py', 'old')
     write(drive, 'sky/a.py', 'old')
     write(drive, 'sky/a.py.new', 'new')
-    write(drive, 'update.todo', 'put sky/a.py\nput sky/app.py\n')    # sky/app.py.new never finished downloading
+    write(drive, 'update.todo', 'put sky/a.py\nput sky/app.py\nend\n')    # sky/app.py.new never finished downloading
     run_boot(drive)
     check(read(drive, 'sky/app.py') == 'old' and read(drive, 'sky/a.py') == 'old', 'half an update is not swapped in')
     check(read(drive, 'sky/a.py.new') is None and read(drive, 'update.todo') is None, 'its pieces are cleared away')
@@ -336,49 +373,69 @@ def staged(drive):
                        ('manifest.json', 'new list')):
         write(drive, name + '.new', text)
     write(drive, 'update.todo', 'put sky/app.py\nput sky/net.py\nput sky/added.py\ndel sky/gone.py\n'
-                                'put manifest.json\n')
+                                'put manifest.json\nend\n')
 
 
 NEW = {'sky/app.py': 'new app', 'sky/net.py': 'new net', 'sky/added.py': 'new added', 'sky/gone.py': None,
        'manifest.json': 'new list'}
 OLD = {'sky/app.py': 'old app', 'sky/net.py': 'old net', 'sky/added.py': None, 'sky/gone.py': 'old gone',
        'manifest.json': 'old list'}
+JOURNALS = ('update.todo', 'update.swap', 'update.trial')
+
+
+def leftovers(drive):
+    return [n for j in JOURNALS for n in (j, j + '.new') if read(drive, n) is not None]
+
+
 whole = True
-for cut in range(0, 12):
+for cut in range(0, 200):
     with tempfile.TemporaryDirectory() as drive:
         staged(drive)
-        run_boot(drive, cut_after=cut)
+        if not run_boot(drive, cut_after=cut):
+            break
         run_boot(drive)
         now = {k: read(drive, k) for k in NEW}
         if now != NEW or read(drive, 'update.swap') is not None or read(drive, 'update.todo') is not None:
             whole = False
-            print('      power cut after %d renames left %r' % (cut, now))
-        for _ in range(3):
-            run_boot(drive)
-        if {k: read(drive, k) for k in OLD} != OLD:
-            whole = False
-            print('      power cut after %d renames: the earlier version did not come back' % cut)
-check(whole, 'a power cut at any point of the swap is finished at the next start, and can still be taken back')
+            print('      power cut after %d steps left %r' % (cut, now))
+check(whole and cut > 20, 'a power cut at any step of the swap, writes included, is finished at the next start')
 
-whole = True
-for cut in range(0, 10):
-    with tempfile.TemporaryDirectory() as drive:
-        staged(drive)
-        for _ in range(3):
-            run_boot(drive)
-        run_boot(drive, cut_after=cut)   # the start that takes the update back loses power part way
-        run_boot(drive)
-        if ({k: read(drive, k) for k in OLD} != OLD or read(drive, 'manifest.refused') != 'new list' or
-                read(drive, 'update.trial') is not None):
-            whole = False
-            print('      power cut after %d renames of the take-back left %r, refused %r' % (
-                cut, {k: read(drive, k) for k in OLD}, read(drive, 'manifest.refused')))
-check(whole, 'a power cut while taking an update back is finished at the next start')
+whole, tried = True, 0
+for which in range(5):   # the start that loses power: the swap, the three that count, the one that takes it back
+    for cut in range(0, 200):
+        with tempfile.TemporaryDirectory() as drive:
+            staged(drive)
+            for _ in range(which):
+                run_boot(drive)
+            if not run_boot(drive, cut_after=cut):
+                break
+            tried += 1
+            for _ in range(6):
+                run_boot(drive)
+            if ({k: read(drive, k) for k in OLD} != OLD or read(drive, 'manifest.refused') != 'new list' or
+                    leftovers(drive)):
+                whole = False
+                print('      power cut on start %d after %d steps left %r, refused %r, lists %r' % (
+                    which + 1, cut, {k: read(drive, k) for k in OLD}, read(drive, 'manifest.refused'),
+                    leftovers(drive)))
+check(whole and tried > 50, 'a power cut at any step of any start on trial still ends with the earlier version back')
+
+with tempfile.TemporaryDirectory() as drive:
+    staged(drive)
+    write(drive, 'update.todo', 'put sky/app.py\nput sky/net.py\n')   # cut before the rest of the list was written
+    run_boot(drive)
+    check(read(drive, 'sky/app.py') == 'old app' and read(drive, 'sky/net.py') == 'old net' and
+          read(drive, 'update.trial') is None, 'a half-written to-do list is not trusted')
+    staged(drive)
+    write(drive, 'update.swap', 'put sky/app.py\n')                       # the first line of a swap list, no end
+    run_boot(drive)
+    check({k: read(drive, k) for k in NEW} == NEW and not read(drive, 'update.swap'),
+          'a half-written swap list is passed over for the whole to-do list')
 
 with tempfile.TemporaryDirectory() as drive:
     write(drive, 'boot.py', 'mine')
     write(drive, 'BOOT.PY.new', 'evil')
-    write(drive, 'update.todo', 'put BOOT.PY\n')
+    write(drive, 'update.todo', 'put BOOT.PY\nend\n')
     run_boot(drive)
     check(read(drive, 'boot.py') == 'mine', 'a to-do naming BOOT.PY is refused too')
 
@@ -386,14 +443,14 @@ with tempfile.TemporaryDirectory() as drive:
     for name in ('boot.py', 'code.py'):
         write(drive, name, 'mine')
         write(drive, name + '.new', 'evil')
-        write(drive, 'update.todo', 'put %s\n' % name)
+        write(drive, 'update.todo', 'put %s\nend\n' % name)
         run_boot(drive)
         check(read(drive, name) == 'mine', 'a to-do naming %s is refused' % name)
 
 with tempfile.TemporaryDirectory() as drive:
     write(drive, 'sky/app.py', 'old')
     write(drive, 'sky/app.py.new', 'new')
-    write(drive, 'update.todo', 'put sky/app.py\n')
+    write(drive, 'update.todo', 'put sky/app.py\nend\n')
     run_boot(drive, down_held=True)
     check(read(drive, 'sky/app.py') == 'old' and read(drive, 'update.todo') is not None,
           'with Down held the drive is left to the computer and nothing is swapped')

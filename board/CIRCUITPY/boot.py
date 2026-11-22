@@ -53,12 +53,30 @@ def move(a, b):
         os.rename('/' + a, '/' + b)
 
 
-def read_list(name):
+# The three lists below (update.todo, update.swap, update.trial) each end with a line "end", so a list that a power
+# cut left half written is never taken for a whole one. Each is written first under its name with ".new" on it and
+# only then put in place, so the earlier list stays whole until its replacement is.
+def whole_list(name):
     try:
         with open('/' + name) as f:
-            return [line.strip().split(' ', 1) for line in f if line.strip()]
-    except OSError:
-        return []
+            lines = [line.strip().split(' ', 1) for line in f if line.strip()]
+    except (OSError, ValueError):
+        return None
+    if not lines or lines[-1] != ['end']:
+        return None
+    return lines[:-1]
+
+
+def read_list(name):
+    lines = whole_list(name)
+    if lines is None:
+        lines = whole_list(name + '.new')   # the power went just after the old list was cleared
+    return lines or []
+
+
+def drop_list(name):
+    gone(name)
+    gone(name + '.new')
 
 
 def rename(a, b):
@@ -66,11 +84,14 @@ def rename(a, b):
 
 
 def write_list(name, first, steps):
-    with open('/' + name, 'w') as f:
+    with open('/' + name + '.new', 'w') as f:
         if first is not None:
             f.write(first + '\n')
         for t in steps:
             f.write('%s %s\n' % (t[0], t[1]))
+        f.write('end\n')
+    gone(name)
+    rename(name + '.new', name)
 
 
 if not to_computer:
@@ -106,12 +127,12 @@ if not to_computer:
             # "add" marks a file that had no earlier version, so taking the update back only removes it
             kept = [('put' if there(t[1] + '.old') else 'add', t[1]) if t[0] == 'put' else t for t in todo]
             write_list('update.trial', '0', kept)
-            gone('update.swap')
+            drop_list('update.swap')
         else:
             for t in todo:
                 if len(t) == 2 and plain(t[1]):
                     gone(t[1] + '.new')
-        gone('update.todo')
+        drop_list('update.todo')
 
     # 2. An update on trial: count this start. After three starts that each stopped before ten minutes, put the
     # earlier version back, and keep the update list that failed so the board does not fetch it again. Each step of
@@ -134,6 +155,6 @@ if not to_computer:
                 elif there(name + '.old'):
                     gone(name)
                     rename(name + '.old', name)
-            gone('update.trial')
+            drop_list('update.trial')
         else:
             write_list('update.trial', '%d' % starts, steps)
