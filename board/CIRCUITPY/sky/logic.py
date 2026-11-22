@@ -466,6 +466,16 @@ def safe_path(path):
     return True
 
 
+def folders_of(paths):
+    """Every folder that the given paths sit in: sky/a/b.py sits in sky and sky/a."""
+    out = set()
+    for p in paths:
+        parts = p.split('/')[:-1]
+        for i in range(1, len(parts) + 1):
+            out.add('/'.join(parts[:i]))
+    return out
+
+
 def plan_update(local, remote, refused=None):
     """Compare the update list on the board with the one in the repository. Returns (fetch, remove): the files to
     download, as (path, sha, size), and the files the board had from an earlier list that the new list dropped.
@@ -480,6 +490,8 @@ def plan_update(local, remote, refused=None):
     names = [p.lower() for p in remote['files'] if isinstance(p, str)]
     if len(set(names)) != len(remote['files']):
         return None   # two names for one file on the board's drive
+    if set(names) & folders_of(names + [p.lower() for p in have if isinstance(p, str)]):
+        return None   # a file named like a folder another file lives in
     for path, f in remote['files'].items():
         if not safe_path(path) or not isinstance(f, dict):
             return None

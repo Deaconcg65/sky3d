@@ -191,6 +191,11 @@ check(logic.plan_update(local, remote) == ([('sky/new.py', 'b' * 64, 5)], ['sky/
       'only changed files are fetched, dropped ones removed')
 check(logic.plan_update({}, remote)[0] == [('sky/app.py', sha, 10), ('sky/new.py', 'b' * 64, 5)],
       'a board with no list fetches everything')
+check(logic.plan_update(local, {'files': dict(remote['files'], sky={'sha': sha, 'size': 1})}) is None,
+      'a list naming a file sky beside the folder sky is refused')
+check(logic.plan_update({'files': {'lib/a/b.py': {'sha': sha, 'size': 1}}},
+                        {'files': dict(remote['files'], **{'lib/a': {'sha': sha, 'size': 1}})}) is None,
+      'a list naming a file where the board has a folder is refused')
 for alias in ('boot.py.', 'config.json.', 'sky/app.py.'):
     check(logic.plan_update(local, {'files': dict(remote['files'], **{alias: {'sha': sha, 'size': 1}})}) is None,
           'a list naming %r is refused' % alias)
@@ -567,6 +572,20 @@ with tempfile.TemporaryDirectory() as drive:
     run_boot(drive)
     check(read(drive, 'boot.py') == 'mine' and read(drive, 'boot.py.') is None,
           'a to-do naming boot.py with a dot on the end is refused')
+
+with tempfile.TemporaryDirectory() as drive:
+    write(drive, 'sky/app.py', 'old')
+    write(drive, 'sky.new', 'a file')
+    write(drive, 'sky/app.py.new', 'new')
+    write(drive, 'update.todo', 'put sky\nput sky/app.py\nend\n')
+    run_boot(drive)
+    check(read(drive, 'sky/app.py') == 'old' and not os.path.exists(os.path.join(drive, 'sky.old')),
+          'a to-do naming a file and a folder the same is refused')
+    write(drive, 'sky.new', 'a file')
+    write(drive, 'update.todo', 'put sky\nend\n')
+    run_boot(drive)
+    check(read(drive, 'sky/app.py') == 'old' and os.path.isdir(os.path.join(drive, 'sky')),
+          'a to-do that would put a file over a folder is refused')
 
 with tempfile.TemporaryDirectory() as drive:
     for name in ('boot.py', 'code.py'):

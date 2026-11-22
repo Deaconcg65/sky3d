@@ -34,6 +34,22 @@ def plain(path):
     return not (low.endswith('.new') or low.endswith('.old'))
 
 
+def folder(path):
+    try:
+        return bool(os.stat('/' + path)[0] & 0x4000)
+    except OSError:
+        return False
+
+
+def folders_of(names):
+    out = set()
+    for n in names:
+        parts = n.split('/')[:-1]
+        for i in range(1, len(parts) + 1):
+            out.add('/'.join(parts[:i]))
+    return out
+
+
 def there(path):
     try:
         os.stat('/' + path)
@@ -112,6 +128,8 @@ if not to_computer:
         names = [t[1].lower() for t in todo if len(t) == 2]
         good = all(len(t) == 2 and t[0] in ('put', 'del') and plain(t[1]) for t in todo)
         good = good and len(set(names)) == len(names)
+        # never a name that is a folder, on the drive or for another file in the list
+        good = good and not (set(names) & folders_of(names)) and not any(folder(t[1]) for t in todo)
         if good and not swap:
             good = all(there(t[1] + '.new') for t in todo if t[0] == 'put')
             if good:
