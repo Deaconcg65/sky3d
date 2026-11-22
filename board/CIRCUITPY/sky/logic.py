@@ -438,7 +438,7 @@ def find_zip(f, size, zipcode):
 
 SAFE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-./'
 NEVER_UPDATED = ('boot.py', 'code.py', 'config.json', 'manifest.json', 'manifest.refused', 'settings.toml',
-                 'update.todo', 'update.trial')
+                 'update.todo', 'update.trial', 'update.swap')
 
 
 def safe_path(path):
@@ -452,7 +452,8 @@ def safe_path(path):
     parts = path.split('/')
     if len(parts) > 3 or any(p in ('', '.', '..') or p.startswith('.') for p in parts):
         return False
-    if path in NEVER_UPDATED or path.endswith('.new') or path.endswith('.old'):
+    low = path.lower()   # the board's drive does not tell BOOT.PY from boot.py
+    if low in NEVER_UPDATED or low.endswith('.new') or low.endswith('.old'):
         return False
     return True
 
@@ -468,6 +469,9 @@ def plan_update(local, remote, refused=None):
     have = local.get('files') if isinstance(local, dict) and isinstance(local.get('files'), dict) else {}
     fetch = []
     total = 0
+    names = [p.lower() for p in remote['files'] if isinstance(p, str)]
+    if len(set(names)) != len(remote['files']):
+        return None   # two names for one file on the board's drive
     for path, f in remote['files'].items():
         if not safe_path(path) or not isinstance(f, dict):
             return None
@@ -482,7 +486,7 @@ def plan_update(local, remote, refused=None):
             fetch.append((path, sha, size))
     if total > 3 * 1024 * 1024 or 'sky/app.py' not in remote['files']:
         return None
-    remove = [p for p in have if p not in remote['files'] and safe_path(p)]
+    remove = [p for p in have if p.lower() not in names and safe_path(p)]
     fetch.sort()
     remove.sort()
     return fetch, remove

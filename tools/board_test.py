@@ -176,7 +176,8 @@ with open(zips, 'rb') as f:
 check(logic.safe_path('sky/app.py') and logic.safe_path('sky/logic.py') and logic.safe_path('lib/a/b.py'),
       'plain board paths may be updated')
 for bad in ('boot.py', 'code.py', 'config.json', 'manifest.json', 'update.trial', 'x.py.old', '../x.py', 'sky/../boot.py', '/code.py', '.hidden',
-            'sky/.x', 'a/b/c/d.py', 'x.py.new', 'sky//x.py', 'sp ace.py', 'x\\y.py', '', 'a' * 81):
+            'sky/.x', 'a/b/c/d.py', 'x.py.new', 'sky//x.py', 'sp ace.py', 'x\\y.py', '', 'a' * 81,
+            'BOOT.py', 'Boot.PY', 'CONFIG.JSON', 'Code.py', 'x.py.NEW', 'x.py.Old', 'UPDATE.TRIAL', 'update.swap'):
     check(not logic.safe_path(bad), 'never updated: ' + repr(bad[:20]))
 sha = 'a' * 64
 remote = {'files': {'sky/app.py': {'sha': sha, 'size': 10}, 'sky/new.py': {'sha': 'b' * 64, 'size': 5}}}
@@ -191,6 +192,11 @@ check(logic.plan_update(local, remote, refused={'files': {}}) is not None, 'a di
 for name in ('boot.py', 'code.py'):
     check(logic.plan_update(local, {'files': {'sky/app.py': {'sha': sha, 'size': 10}, name: {'sha': sha, 'size': 1}}})
           is None, 'a list naming %s is refused whole' % name)
+check(logic.plan_update(local, {'files': {'sky/app.py': {'sha': sha, 'size': 10}, 'SKY/App.py': {'sha': sha, 'size': 1}}})
+      is None, 'a list with two spellings of one file is refused')
+check(logic.plan_update({'files': {'Sky/Old.py': {'sha': sha, 'size': 1}}},
+                        {'files': {'sky/app.py': {'sha': sha, 'size': 10}, 'sky/old.py': {'sha': sha, 'size': 1}}})[1]
+      == [], 'a file kept under another spelling is not removed')
 check(logic.plan_update(local, {'files': {'sky/app.py': {'sha': 'xyz', 'size': 10}}}) is None, 'a bad checksum')
 check(logic.plan_update(local, {'files': {'sky/x.py': {'sha': sha, 'size': 1}}}) is None, 'a list with no app')
 check(logic.plan_update(local, {'files': {'sky/app.py': {'sha': sha, 'size': 10 ** 7}}}) is None, 'a huge file')
@@ -212,14 +218,26 @@ check(not any(k in man['files'] for k in ('boot.py', 'code.py', 'config.json')),
 tree = ast.parse(open(os.path.join(ROOT, 'boot.py')).read())
 
 
-def run_boot(drive, down_held=False):
+class PowerCut(Exception):
+    pass
+
+
+def run_boot(drive, down_held=False, cut_after=None):
+    """Run boot.py against a stand-in drive. cut_after stops it, as a power cut would, after that many renames."""
     real = os
+    renames = [0]
+
+    def rename(a, b):
+        if cut_after is not None and renames[0] >= cut_after:
+            raise PowerCut()
+        renames[0] += 1
+        real.rename(at(a), at(b))
 
     def at(p):
         return real.path.join(drive, p.lstrip('/'))
 
     fake_os = types.SimpleNamespace(
-        remove=lambda p: real.remove(at(p)), rename=lambda a, b: real.rename(at(a), at(b)),
+        remove=lambda p: real.remove(at(p)), rename=rename,
         stat=lambda p: real.stat(at(p)))
     pin = types.SimpleNamespace(value=not down_held, switch_to_input=lambda pull=None: None, deinit=lambda: None)
     mods = {'board': types.SimpleNamespace(BUTTON_DOWN=1),
@@ -229,6 +247,8 @@ def run_boot(drive, down_held=False):
     sys.modules.update(mods)
     try:
         exec(compile(tree, 'boot.py', 'exec'), {'open': lambda p, *a, **k: open(at(p), *a, **k), '__name__': 'boot'})
+    except PowerCut:
+        pass
     finally:
         for k, v in saved.items():
             if v is None:
@@ -306,6 +326,46 @@ with tempfile.TemporaryDirectory() as drive:
     run_boot(drive)
     check(read(drive, 'sky/app.py') == 'old' and read(drive, 'sky/a.py') == 'old', 'half an update is not swapped in')
     check(read(drive, 'sky/a.py.new') is None and read(drive, 'update.todo') is None, 'its pieces are cleared away')
+
+def staged(drive):
+    write(drive, 'sky/app.py', 'old app')
+    write(drive, 'sky/net.py', 'old net')
+    write(drive, 'sky/gone.py', 'old gone')
+    write(drive, 'manifest.json', 'old list')
+    for name, text in (('sky/app.py', 'new app'), ('sky/net.py', 'new net'), ('sky/added.py', 'new added'),
+                       ('manifest.json', 'new list')):
+        write(drive, name + '.new', text)
+    write(drive, 'update.todo', 'put sky/app.py\nput sky/net.py\nput sky/added.py\ndel sky/gone.py\n'
+                                'put manifest.json\n')
+
+
+NEW = {'sky/app.py': 'new app', 'sky/net.py': 'new net', 'sky/added.py': 'new added', 'sky/gone.py': None,
+       'manifest.json': 'new list'}
+OLD = {'sky/app.py': 'old app', 'sky/net.py': 'old net', 'sky/added.py': None, 'sky/gone.py': 'old gone',
+       'manifest.json': 'old list'}
+whole = True
+for cut in range(0, 12):
+    with tempfile.TemporaryDirectory() as drive:
+        staged(drive)
+        run_boot(drive, cut_after=cut)
+        run_boot(drive)
+        now = {k: read(drive, k) for k in NEW}
+        if now != NEW or read(drive, 'update.swap') is not None or read(drive, 'update.todo') is not None:
+            whole = False
+            print('      power cut after %d renames left %r' % (cut, now))
+        for _ in range(3):
+            run_boot(drive)
+        if {k: read(drive, k) for k in OLD} != OLD:
+            whole = False
+            print('      power cut after %d renames: the earlier version did not come back' % cut)
+check(whole, 'a power cut at any point of the swap is finished at the next start, and can still be taken back')
+
+with tempfile.TemporaryDirectory() as drive:
+    write(drive, 'boot.py', 'mine')
+    write(drive, 'BOOT.PY.new', 'evil')
+    write(drive, 'update.todo', 'put BOOT.PY\n')
+    run_boot(drive)
+    check(read(drive, 'boot.py') == 'mine', 'a to-do naming BOOT.PY is refused too')
 
 with tempfile.TemporaryDirectory() as drive:
     for name in ('boot.py', 'code.py'):
