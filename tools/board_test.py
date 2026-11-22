@@ -177,7 +177,8 @@ check(logic.safe_path('sky/app.py') and logic.safe_path('sky/logic.py') and logi
       'plain board paths may be updated')
 for bad in ('boot.py', 'code.py', 'config.json', 'config.json.tmp', 'manifest.json', 'update.trial', 'x.py.old', '../x.py', 'sky/../boot.py', '/code.py', '.hidden',
             'sky/.x', 'a/b/c/d.py', 'x.py.new', 'sky//x.py', 'sp ace.py', 'x\\y.py', '', 'a' * 81,
-            'BOOT.py', 'Boot.PY', 'CONFIG.JSON', 'Code.py', 'x.py.NEW', 'x.py.Old', 'UPDATE.TRIAL', 'update.swap'):
+            'BOOT.py', 'Boot.PY', 'CONFIG.JSON', 'Code.py', 'x.py.NEW', 'x.py.Old', 'UPDATE.TRIAL', 'update.swap',
+            'boot.py.', 'config.json.', 'code.py..', 'sky./app.py', 'sky/app.py.new.', 'lib./x.py'):
     check(not logic.safe_path(bad), 'never updated: ' + repr(bad[:20]))
 sha = 'a' * 64
 remote = {'files': {'sky/app.py': {'sha': sha, 'size': 10}, 'sky/new.py': {'sha': 'b' * 64, 'size': 5}}}
@@ -186,6 +187,9 @@ check(logic.plan_update(local, remote) == ([('sky/new.py', 'b' * 64, 5)], ['sky/
       'only changed files are fetched, dropped ones removed')
 check(logic.plan_update({}, remote)[0] == [('sky/app.py', sha, 10), ('sky/new.py', 'b' * 64, 5)],
       'a board with no list fetches everything')
+for alias in ('boot.py.', 'config.json.', 'sky/app.py.'):
+    check(logic.plan_update(local, {'files': dict(remote['files'], **{alias: {'sha': sha, 'size': 1}})}) is None,
+          'a list naming %r is refused' % alias)
 check(logic.plan_update(local, remote, refused={'files': remote['files']}) is None,
       'the list that boot.py had to take back is not fetched again')
 check(logic.plan_update(local, remote, refused={'files': {}}) is not None, 'a different list is fetched')
@@ -520,6 +524,14 @@ with tempfile.TemporaryDirectory() as drive:
     write(drive, 'update.todo', 'put BOOT.PY\nend\n')
     run_boot(drive)
     check(read(drive, 'boot.py') == 'mine', 'a to-do naming BOOT.PY is refused too')
+
+with tempfile.TemporaryDirectory() as drive:
+    write(drive, 'boot.py', 'mine')
+    write(drive, 'boot.py..new', 'evil')
+    write(drive, 'update.todo', 'put boot.py.\nend\n')
+    run_boot(drive)
+    check(read(drive, 'boot.py') == 'mine' and read(drive, 'boot.py.') is None,
+          'a to-do naming boot.py with a dot on the end is refused')
 
 with tempfile.TemporaryDirectory() as drive:
     for name in ('boot.py', 'code.py'):

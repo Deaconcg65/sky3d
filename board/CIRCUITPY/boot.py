@@ -24,7 +24,8 @@ def plain(path):
     if not 0 < len(path) <= 80 or any(c not in ok for c in path):
         return False
     parts = path.split('/')
-    if len(parts) > 3 or any(p in ('', '.', '..') or p.startswith('.') for p in parts):
+    # the drive drops dots at the end of a name, so boot.py. would be boot.py
+    if len(parts) > 3 or any(p in ('', '.', '..') or p.startswith('.') or p.endswith('.') for p in parts):
         return False
     low = path.lower()   # the drive does not tell BOOT.PY from boot.py
     if low in ('boot.py', 'code.py', 'config.json', 'config.json.tmp', 'settings.toml', 'manifest.refused',
