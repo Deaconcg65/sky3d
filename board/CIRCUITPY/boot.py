@@ -18,20 +18,22 @@ if not to_computer:
 
 
 def plain(path):
-    # the same rule the updater uses (sky/logic.py, safe_path), written out here because this file never changes;
-    # manifest.json is allowed here because the update itself replaces it
-    ok = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-./'
-    if not 0 < len(path) <= 80 or any(c not in ok for c in path):
+    # the same shape the updater allows (sky/logic.py, safe_path), written out here because this file never changes:
+    # up to two folders of lower-case letters, digits and _, then such a file with one dot and a known extension, so
+    # no name can stand for another on this drive (which ignores case and drops trailing dots) or for a ".new" or
+    # ".old" working file; manifest.json is allowed here because the update itself replaces it
+    ok = 'abcdefghijklmnopqrstuvwxyz0123456789_'
+    if not 0 < len(path) <= 80:
         return False
     parts = path.split('/')
-    # the drive drops dots at the end of a name, so boot.py. would be boot.py
-    if len(parts) > 3 or any(p in ('', '.', '..') or p.startswith('.') or p.endswith('.') for p in parts):
+    if len(parts) > 3 or any(not p or any(c not in ok for c in p) for p in parts[:-1]):
         return False
-    low = path.lower()   # the drive does not tell BOOT.PY from boot.py
-    if low in ('boot.py', 'code.py', 'config.json', 'config.json.tmp', 'settings.toml', 'manifest.refused',
-               'update.todo', 'update.trial', 'update.swap'):
+    bits = parts[-1].split('.')
+    if len(bits) != 2 or not bits[0] or any(c not in ok for c in bits[0]):
         return False
-    return not (low.endswith('.new') or low.endswith('.old'))
+    if bits[1] not in ('py', 'mpy', 'json', 'bin', 'txt'):
+        return False
+    return path not in ('boot.py', 'code.py', 'config.json')
 
 
 def folder(path):

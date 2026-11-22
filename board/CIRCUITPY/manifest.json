@@ -1,11 +1,6 @@
 {
  "board": "skypuppy3d LED flight board",
  "files": {
-  "lib/LICENSES.txt": {
-   "sha": "6760e2db812bfbd1dc487d0deab24b5f1d17d10c57f7a378ada042c7bef9898e",
-   "sha1": "3a47543a948768b1fe49332ad241ef2cc98f73d8",
-   "size": 3460
-  },
   "lib/adafruit_connection_manager.py": {
    "sha": "03a11060a5a6e877a3bd32185432ffa7ae7b155d1ea26a0b19f84e24f6f18cc8",
    "sha1": "d0d345fe789774dda5afa8394b2f28eee3e6eb3c",
@@ -26,6 +21,11 @@
    "sha1": "2a92402726c510ad868cb4f73b397c4010f747f9",
    "size": 27400
   },
+  "lib/licenses.txt": {
+   "sha": "6760e2db812bfbd1dc487d0deab24b5f1d17d10c57f7a378ada042c7bef9898e",
+   "sha1": "3a47543a948768b1fe49332ad241ef2cc98f73d8",
+   "size": 3460
+  },
   "sky/__init__.py": {
    "sha": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
    "sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709",
@@ -37,9 +37,9 @@
    "size": 5025
   },
   "sky/logic.py": {
-   "sha": "961c9495e4f9ed381f99b9516e11187113378d95bb236c4e4b4b120d9ffe7129",
-   "sha1": "f806703c8f00197b37322a6bafb2e84a97027de2",
-   "size": 22844
+   "sha": "157a2cea9b01c77c1ef84ba229685d82e100dd11ae68b511bc43c0eb05415f4e",
+   "sha1": "a7d15c0301a62400c35d998a04fed42379f07a18",
+   "size": 22970
   },
   "sky/net.py": {
    "sha": "e655deb8501d703bf13945b67061c006d20234cb3b5b32738c4fbc68b4350963",

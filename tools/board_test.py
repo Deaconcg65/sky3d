@@ -182,8 +182,13 @@ check(logic.safe_path('sky/app.py') and logic.safe_path('sky/logic.py') and logi
 for bad in ('boot.py', 'code.py', 'config.json', 'config.json.tmp', 'manifest.json', 'update.trial', 'x.py.old', '../x.py', 'sky/../boot.py', '/code.py', '.hidden',
             'sky/.x', 'a/b/c/d.py', 'x.py.new', 'sky//x.py', 'sp ace.py', 'x\\y.py', '', 'a' * 81,
             'BOOT.py', 'Boot.PY', 'CONFIG.JSON', 'Code.py', 'x.py.NEW', 'x.py.Old', 'UPDATE.TRIAL', 'update.swap',
-            'boot.py.', 'config.json.', 'code.py..', 'sky./app.py', 'sky/app.py.new.', 'lib./x.py'):
+            'boot.py.', 'config.json.', 'code.py..', 'sky./app.py', 'sky/app.py.new.', 'lib./x.py',
+            'sky/app.py.old/extra.py', 'sky/app.old/x.py', 'sky.new/x.py', 'sky/App.py', 'a.b.py', 'sky/x',
+            'sky/x.sh', 'sky/-x.py', 'config.json.tmp/x.py', 'settings.toml'):
     check(not logic.safe_path(bad), 'never updated: ' + repr(bad[:20]))
+shipped = json.load(open(os.path.join(ROOT, 'manifest.json')))
+check(all(logic.safe_path(p) for p in shipped['files']) and logic.plan_update({}, shipped),
+      'every file the board ships with fits the update rules')
 sha = 'a' * 64
 remote = {'files': {'sky/app.py': {'sha': sha, 'size': 10}, 'sky/new.py': {'sha': 'b' * 64, 'size': 5}}}
 local = {'files': {'sky/app.py': {'sha': sha, 'size': 10}, 'sky/old.py': {'sha': 'c' * 64, 'size': 5}}}
@@ -196,7 +201,7 @@ check(logic.plan_update(local, {'files': dict(remote['files'], sky={'sha': sha, 
 check(logic.plan_update({'files': {'lib/a/b.py': {'sha': sha, 'size': 1}}},
                         {'files': dict(remote['files'], **{'lib/a': {'sha': sha, 'size': 1}})}) is None,
       'a list naming a file where the board has a folder is refused')
-for alias in ('boot.py.', 'config.json.', 'sky/app.py.'):
+for alias in ('boot.py.', 'config.json.', 'sky/app.py.', 'sky/app.py.old/extra.py'):
     check(logic.plan_update(local, {'files': dict(remote['files'], **{alias: {'sha': sha, 'size': 1}})}) is None,
           'a list naming %r is refused' % alias)
 check(logic.plan_update(local, remote, refused={'files': remote['files']}) is None,
@@ -572,6 +577,14 @@ with tempfile.TemporaryDirectory() as drive:
     run_boot(drive)
     check(read(drive, 'boot.py') == 'mine' and read(drive, 'boot.py.') is None,
           'a to-do naming boot.py with a dot on the end is refused')
+
+with tempfile.TemporaryDirectory() as drive:
+    write(drive, 'sky/app.py', 'old')
+    write(drive, 'sky/app.py.new', 'new')
+    write(drive, 'sky/app.py.old.new/extra.py', 'x')
+    write(drive, 'update.todo', 'put sky/app.py\nput sky/app.py.old/extra.py\nend\n')
+    run_boot(drive)
+    check(read(drive, 'sky/app.py') == 'old', 'a to-do naming a folder sky/app.py.old is refused')
 
 with tempfile.TemporaryDirectory() as drive:
     write(drive, 'sky/app.py', 'old')

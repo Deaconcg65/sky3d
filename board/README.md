@@ -19,7 +19,7 @@ The plan, the parts and the reasons are in BUILD-NOTES.md under version 3.15. Th
     `sky/setup.py` runs setup mode. `sky/store.py` reads and writes the board's own files.
   - `zips.bin` is the ZIP code table, built by `tools/board_zips.py`.
   - `manifest.json` lists every file with its size and checksum, built by `tools/board_manifest.py`.
-  - `lib/` holds three Adafruit libraries (MIT license, see `lib/LICENSES.txt`).
+  - `lib/` holds three Adafruit libraries (MIT license, see `lib/licenses.txt`).
 - The board's own settings live only on the board, in `config.json`. That file is never in this repository.
 
 ## Setting it up where it hangs
