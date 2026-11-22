@@ -360,6 +360,21 @@ for cut in range(0, 12):
             print('      power cut after %d renames: the earlier version did not come back' % cut)
 check(whole, 'a power cut at any point of the swap is finished at the next start, and can still be taken back')
 
+whole = True
+for cut in range(0, 10):
+    with tempfile.TemporaryDirectory() as drive:
+        staged(drive)
+        for _ in range(3):
+            run_boot(drive)
+        run_boot(drive, cut_after=cut)   # the start that takes the update back loses power part way
+        run_boot(drive)
+        if ({k: read(drive, k) for k in OLD} != OLD or read(drive, 'manifest.refused') != 'new list' or
+                read(drive, 'update.trial') is not None):
+            whole = False
+            print('      power cut after %d renames of the take-back left %r, refused %r' % (
+                cut, {k: read(drive, k) for k in OLD}, read(drive, 'manifest.refused')))
+check(whole, 'a power cut while taking an update back is finished at the next start')
+
 with tempfile.TemporaryDirectory() as drive:
     write(drive, 'boot.py', 'mine')
     write(drive, 'BOOT.PY.new', 'evil')

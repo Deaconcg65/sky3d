@@ -103,7 +103,9 @@ if not to_computer:
                         rename(name, name + '.old')
                 if t[0] == 'put':
                     rename(name + '.new', name)
-            write_list('update.trial', '0', todo)
+            # "add" marks a file that had no earlier version, so taking the update back only removes it
+            kept = [('put' if there(t[1] + '.old') else 'add', t[1]) if t[0] == 'put' else t for t in todo]
+            write_list('update.trial', '0', kept)
             gone('update.swap')
         else:
             for t in todo:
@@ -112,23 +114,26 @@ if not to_computer:
         gone('update.todo')
 
     # 2. An update on trial: count this start. After three starts that each stopped before ten minutes, put the
-    # earlier version back, and keep the update list that failed so the board does not fetch it again.
+    # earlier version back, and keep the update list that failed so the board does not fetch it again. Each step of
+    # taking it back can run again too: a file is only replaced while its ".old" copy is still there, and
+    # update.trial goes only once every step is done, so a power cut here is finished at the next start.
     trial = read_list('update.trial')
     if trial:
         try:
             starts = int(trial[0][0]) + 1
         except (ValueError, IndexError):
             starts = 99
-        steps = [t for t in trial[1:] if len(t) == 2 and plain(t[1])]
+        steps = [t for t in trial[1:] if len(t) == 2 and t[0] in ('put', 'add', 'del') and plain(t[1])]
         if starts > 3:
-            move('manifest.json', 'manifest.refused')
+            if there('manifest.json.old') and there('manifest.json'):
+                move('manifest.json', 'manifest.refused')
             for t in steps:
-                if t[0] == 'put':
-                    gone(t[1])
-                move(t[1] + '.old', t[1])
+                name = t[1]
+                if t[0] == 'add':
+                    gone(name)
+                elif there(name + '.old'):
+                    gone(name)
+                    rename(name + '.old', name)
             gone('update.trial')
         else:
-            with open('/update.trial', 'w') as f:
-                f.write('%d\n' % starts)
-                for t in steps:
-                    f.write('%s %s\n' % (t[0], t[1]))
+            write_list('update.trial', '%d' % starts, steps)
