@@ -545,6 +545,25 @@ with tempfile.TemporaryDirectory() as drive:
     store_on(drive)
     write(drive, 'config.json.tmp', json.dumps({'ssid': 'Home', 'lat': 28.5, 'lon': -81.4}))
     check((store.load_config() or {}).get('ssid') == 'Home', 'settings saved just as the power went are found')
+    check(read(drive, 'config.json') is not None and read(drive, 'config.json.tmp') is None,
+          'and put in their place before anything writes the spare again')
+    lost = []
+    for cut in range(0, 50):   # then the next save loses power at any step
+        store.remove('/config.json')
+        write(drive, 'config.json.tmp', json.dumps({'ssid': 'Home', 'lat': 28.5, 'lon': -81.4, 'fresh': True}))
+        store_on(drive)
+        store.load_config()   # found in the spare after a first power cut
+        store_on(drive, cut)
+        try:
+            store.save_config({'ssid': 'Home', 'lat': 28.5, 'lon': -81.4, 'fresh': False})
+            break
+        except PowerCut:
+            pass
+        store_on(drive)
+        if (store.load_config() or {}).get('ssid') != 'Home':
+            lost.append(cut)
+    store_on(drive)
+    check(not lost, 'a power cut during the next save never loses the settings')
     write(drive, 'config.json', json.dumps({'ssid': 'Old', 'lat': 1, 'lon': 2}))
     write(drive, 'config.json.tmp', '{"ssid": "Ha')
     check((store.load_config() or {}).get('ssid') == 'Old', 'a half-written spare copy leaves the settings alone')

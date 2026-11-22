@@ -19,9 +19,19 @@ def load_config():
         try:
             with open(path) as f:
                 c = json.load(f)
-            break
         except (OSError, ValueError):
-            pass
+            continue
+        if path != CONFIG:
+            # put that whole copy in its place first, so the next save through the spare cannot spoil the only copy
+            try:
+                os.remove(CONFIG)
+            except OSError:
+                pass
+            try:
+                os.rename(path, CONFIG)
+            except OSError:
+                pass
+        break
     if not isinstance(c, dict) or not isinstance(c.get('ssid'), str) or not c['ssid']:
         return None
     if not all(isinstance(c.get(k), (int, float)) for k in ('lat', 'lon')):
