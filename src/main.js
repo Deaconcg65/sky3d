@@ -4,6 +4,7 @@ import { R_EARTH, FT, KT, MI, D2R, clamp, lerp, smooth, angDiff, lerpAng, gcDist
 import { VEX, proj, setOrigin, project, localFrame, Segments, Ground, Sky, WeatherLayer, PlaneMesh, modelFor, makeLabel, SatGround, MODELS } from './scene.js';
 import { AIRLINES, IATA2ICAO, paintFor, partnerOf, FUN } from './airlines.js';
 import { Gallery } from './gallery.js';
+import { parseTowns, nearestPlaces, whereText } from './where.js';
 
 const Q = new URLSearchParams(location.search);
 // __NET__ is set when the page is built: true in the network edition, false in the home edition.
@@ -1194,6 +1195,14 @@ function routeHtml(leg, p) {
   const word = nearA && !(nearB && p.vrate < -200) ? 'Departing' : nearB ? 'Arriving' : '';
   return `${word ? `<span style="margin-left:0">${word}</span> ` : ''}${esc(placeName(a))} <i>${esc(a.iata || a.icao)}</i> <span>to</span> ${esc(placeName(b))} <i>${esc(b.iata || b.icao)}</i>`;
 }
+// Version 3.12.2: where the followed flight is. The place list is read from the page the first time it is needed, and the line
+// is worked out again every 5 seconds, for the followed flight only.
+let towns = null; const whereNow = { hex: '', t: -1e9, text: '' };
+function townsList() { if (!towns) { const el = $('towns-data'); towns = parseTowns(el ? el.textContent : ''); } return towns; }
+function whereLine(p, t) {
+  if (whereNow.hex !== p.hex || t - whereNow.t > 5) { whereNow.hex = p.hex; whereNow.t = t; whereNow.text = whereText(nearestPlaces(townsList(), p.rLat, p.rLon)); }
+  return whereNow.text;
+}
 function updateCaption(t) {
   if (clicked && t >= clickUntil) { clicked = null; if ((shot.kind === 'visit' || shot.kind === 'follow') && shot.plane && capPlane !== shot.plane) prepareCaption(shot.plane); }
   const cl = !!clicked && capPlane === clicked;
@@ -1215,6 +1224,8 @@ function updateCaption(t) {
     if (leg) route = routeHtml(leg, p);
     else if (!route && !p.ground && /^[A-Z]{3}\d/.test(cs)) route = '<span style="margin-left:0">Route not known</span>';   // an airline flight with no route found: say so rather than leave the line empty (version 3.10)
     if ($('c-route')._h !== route) { $('c-route').innerHTML = route; $('c-route')._h = route; }
+    const where = shot.kind === 'follow' && shot.plane === p && !cl ? whereLine(p, t) : '', wn = $('c-where');
+    if (wn._t !== where) { wn._t = where; wn.textContent = where; wn.hidden = !where; }
     const trend = p.vrate > 350 ? 'climbing' : p.vrate < -350 ? 'descending' : '';
     const bits = [];
     const long = prettyType(info.long || '') || info.type || p.type || ''; if (long) bits.push(esc(long));
@@ -1759,7 +1770,7 @@ if (S.follow) setFollow(S.follow);
 if (!MANUAL) { poll(); setInterval(followTick, 1000); setInterval(watchTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { get tookOver() { return tookOver; }, set tookOver(v) { tookOver = v; }, hold, MODELS, get gallery() { return gallery; }, setFun, openGallery, paintOf, get home() { return home; }, set home(v) { home = v; }, save, modelFor, routeHtml, partnerOf, altWords, updateCaption, prepareCaption, get capPlane() { return capPlane; }, cameraOwner, leaveControls, airportLabelAt, centerOnAirport, get labels() { return labels; }, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { get towns() { return towns; }, whereLine, get tookOver() { return tookOver; }, set tookOver(v) { tookOver = v; }, hold, MODELS, get gallery() { return gallery; }, setFun, openGallery, paintOf, get home() { return home; }, set home(v) { home = v; }, save, modelFor, routeHtml, partnerOf, altWords, updateCaption, prepareCaption, get capPlane() { return capPlane; }, cameraOwner, leaveControls, airportLabelAt, centerOnAirport, get labels() { return labels; }, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
   net, NET: __NET__ };

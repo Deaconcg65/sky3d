@@ -651,6 +651,7 @@ const { chromium } = require('playwright');
   // ---------- version 3.12.1: the tour waits after the viewer takes over, for the time in the settings ----------
   const hb = await browser.newPage({ viewport: { width: 960, height: 540 } }); hb.on('pageerror', (e) => errs.push('PAGEERROR (hand back): ' + e.message));
   await hb.goto(PAGE + '&handBack=60'); await planesIn(hb);
+  const townsAtStart = await hb.evaluate(() => window.__sky.towns === null && !window.__sky.follow.want);   // version 3.12.2: the place list is not read until a flight is followed
   const hbSet = await hb.evaluate(() => ({ S: window.__sky.S.handBack, sel: document.getElementById('f-handback').value, opts: [...document.getElementById('f-handback').options].map((o) => o.value).join(',') }));
   ok('the settings offer a minute, 3 minutes, 5 minutes or never, and show the chosen wait', hbSet.S === 60 && hbSet.sel === '60' && hbSet.opts === '60,180,300,0', JSON.stringify(hbSet));
   // a click on an aircraft while the tour runs holds the tour; once the wait is over (the clock is moved back here) it moves on again
@@ -715,6 +716,18 @@ const { chromium } = require('playwright');
   ok('Follow goes straight to the flight, from the tour, a locked aircraft or fly mode, without a stop at the center airport',
     fw.near && fw.near.kind === 'follow' && fw.near.same && !fw.near.jump && fw.near.owner === 'follow' && fw.fromLock === 'follow:follow' && fw.fromFly === 'follow:follow', JSON.stringify(fw));
   ok('a flight far away gets the same move as changing to a far airport', fw.far && fw.far.kind === 'follow' && fw.far.jump && fw.far.plane === 'f0f0f0', JSON.stringify(fw.far));
+  // ---------- version 3.12.2: the followed flight's caption says where it is ----------
+  const wh = await hb.evaluate(async () => {
+    const s = window.__sky, wait = (ms) => new Promise((res) => setTimeout(res, ms)), line = document.getElementById('c-where');
+    const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.callsign() && !q.remote); if (!p) return { none: true };
+    s.setFollow(p.callsign()); for (let i = 0; i < 60 && (line.hidden || !document.getElementById('cap').classList.contains('on')); i++) await wait(250);
+    const r = { text: line.textContent, shown: !line.hidden, parsed: !!s.towns && s.towns.n };
+    s.S.captions = true; s.setFollow(''); await wait(800); r.afterStop = { hidden: line.hidden || !document.getElementById('cap').classList.contains('on') };
+    return r;
+  });
+  ok('the place list is read only once a flight is followed', townsAtStart && wh.parsed > 30000, JSON.stringify({ townsAtStart, parsed: wh.parsed }));
+  ok('a followed flight\'s caption says where it is, in nautical miles from a place', wh.shown && /^(Over [^,]+, .+|\d+ nm (N|NE|E|SE|S|SW|W|NW) of [^,]+, .+)$/.test(wh.text), JSON.stringify(wh));
+  ok('the line goes away when Follow stops', wh.afterStop && wh.afterStop.hidden, JSON.stringify(wh.afterStop));
   ok('a flight not found yet keeps the view where it is, then takes the camera when found', fw.looking && fw.looking.owner === 'lock' && fw.looking.held && fw.looking.lockedOn && fw.found.owner === 'follow' && fw.found.kind === 'follow' && fw.found.plane === 'f1f1f1' && !fw.found.held, JSON.stringify(fw));
   await hb.close();
   // the old fly-only setting carries over: Never stays Never, any other choice becomes 3 minutes

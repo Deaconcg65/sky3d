@@ -1,4 +1,4 @@
-# Build notes: version 3.12.1 (November 20, 2026)
+# Build notes: version 3.12.2 (November 23, 2026)
 
 Written for whoever picks this up next, including a code reviewer. It records what is done, what is left in order, why some choices were made, and how to build and test. Version 3.7 is pull request https://github.com/Deaconcg65/sky3d/pull/2 (branch v3.7-watch-list into main). Version 3.6 was pull request 1, merged November 15.
 
@@ -9,6 +9,16 @@ The audience is plane geeks, and detail is key to them. For shapes, captions and
 ## What this version is
 
 A self-contained 3D web page that shows live aircraft from a home Raspberry Pi ADS-B receiver (readsb and tar1090). Two editions are built from one source: the home edition (antenna only) and the network edition (antenna plus public flight networks, through the relay in relay/relay.py). The page is shared on the internet at skypuppy3d.com through a Cloudflare tunnel, so treat every viewer as untrusted.
+
+## Version 3.12.2 (November 23, 2026): where the followed flight is
+
+Branch v3.12.2-where, built on v3.12.1-pause (pull request 10), so it goes in after 3.12.1. Chris, November 23: "If I track a flight, I want to be able to know where the flight is on the map….closest city/etc for context if over water distance in different directions to closest city". Chris said yes to a 25 cutoff the same day and picked nautical miles.
+- While a flight is followed, its caption has one more line under the route. Near a town (within 25 nm) it names that town: "12 nm NE of Danbury, CT", or "Over Danbury, CT" under 1 nm. Farther out it names the nearest place, then the nearest place in each other direction at least 90 degrees round the compass from those already named, up to three: "291 nm S of Saint-Pierre, Saint Pierre and Miquelon · 739 nm NE of Saint George, Bermuda · 1369 nm W of Ponta Delgada, Portugal". A second or third place past 1,500 nm is left off, so far out over the Pacific it can be one place. Directions are from the place to the aircraft, in the eight compass points. The line is worked out every 5 seconds, for the followed flight only, and only while its caption shows (not while a clicked aircraft's caption is up). The progress line keeps statute miles, as before.
+- No "over water" in words: that needs a coastline test, and the three-direction line already says it. A later step if Chris wants it.
+- Places: GeoNames (CC BY 4.0) by way of the all-the-cities npm package 3.1.0 (MIT, GeoNames data of 2020), because this build environment cannot reach geonames.org. Every place of 1,000 or more in the United States and Canada with its state or province, places of 15,000 or more elsewhere with the country's name, and the three largest places of every country, so islands far out at sea show: 38,275 places. Greenland and a few empty territories are not in that package. tools/towns.py writes build/towns.txt (788 KB as text, about 380 KB compressed); tools/build.js carries it in the page as plain text, read only the first time a flight is followed. No service is asked, and the position never leaves the browser. The page grows from about 1.5 MB to 2.3 MB.
+- Speed: a plain pass over every place, about 3 ms on this build machine. No grid needed.
+- Code: src/where.js (new), src/main.js (whereLine, the caption), src/template.html (#c-where, the towns block, the credit in the Follow note), tools/build.js, tools/towns.py (new). NOTICE.md and README.md credit GeoNames.
+- Checks: tools/where.js runs here without a browser (Danbury, a point 12 nm north-east of it, three ocean points, direction from the place, speed). tools/controls.js has a 3.12.2 block (the list is read only once a flight is followed, the line shows in the right form, and goes away when Follow stops), run on Chris's iMac.
 
 ## Version 3.12.1 (November 20, 2026): the tour waits after you take over
 
