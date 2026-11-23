@@ -31,6 +31,25 @@ The plan, the parts and the reasons are in BUILD-NOTES.md under version 3.15. Th
 If the password was wrong, the board comes back to setup by itself after a couple of minutes. To change the Wi-Fi
 later, hold the **Up** button while plugging the board in.
 
+## Testing it at home before it ships
+
+The software has only run on a computer so far, so the gift board gets a full day on the bench in Redding before it
+goes to Florida. Steps go to Chris one at a time when the parts arrive; these are the checks they lead to.
+
+1. Both panels light, in the right order and the right way up, with no flicker on a full white test screen. A
+   flicker means the 4 amp supply is short, and the 5V 10A supply is the fix.
+2. Setup works from a phone: the board makes the skypuppy3d-setup network, takes the home Wi-Fi and a ZIP code,
+   and restarts onto that Wi-Fi. A wrong password brings setup back by itself.
+3. The clock shows the right local time, and the weather matches the National Weather Service forecast for the ZIP.
+4. Nearby flights show with their routes, and match what skypuppy3d shows for the same area.
+5. A flight that passes within 3 miles below 12,000 feet takes over the screen, then gives it back once it has
+   passed.
+6. Pulling the plug in the middle of anything, then plugging it back in, always comes back to a working board.
+7. An update reaches the board within the hour once this folder is on main, and a deliberately broken test
+   update is put back by itself after three failed starts.
+8. A full day running with no restarts or lockups. Then hold Up while plugging it in, so it ships back in setup
+   mode and the son enters his own Wi-Fi and ZIP code.
+
 ## Updates
 
 Once an hour the board asks this repository, on GitHub, for `board/CIRCUITPY/manifest.json` from the main branch.
