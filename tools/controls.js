@@ -694,6 +694,28 @@ const { chromium } = require('playwright');
     s.autoTour(); r.afterA = s.cameraOwner(); r.took = s.tookOver; r.heldAfterA = s.hold(); s.S.handBack = 60; return r;
   });
   ok('with Never, a locked aircraft keeps the camera, and A starts the tour again at once', hbNever.lock === 'lock' && hbNever.held && hbNever.afterA === 'tour' && hbNever.took === 0, JSON.stringify(hbNever));
+  // Follow goes straight to the flight (Chris, November 23: before, the camera first went back to the center airport)
+  const fw = await hb.evaluate(async () => {
+    const s = window.__sky, wait = (ms) => new Promise((res) => setTimeout(res, ms)), r = {};
+    s.setFollow(''); s.autoTour();   // the tour has just started a wide shot, gliding back to the center airport
+    const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.callsign() && !q.remote); if (!p) return { none: true };
+    s.setFollow(p.callsign()); r.near = { kind: s.shot.kind, same: s.shot.plane === p, jump: !!s.shot.jump, owner: s.cameraOwner() };
+    // from a locked aircraft and from fly mode too
+    s.setFollow(''); s.lockOn(p); s.setFollow(p.callsign()); r.fromLock = s.shot.kind + ':' + s.cameraOwner();
+    s.setFollow(''); s.enterFly(); s.setFollow(p.callsign()); r.fromFly = s.shot.kind + ':' + s.cameraOwner();
+    // a flight far away gets the same rise, fade and come-down move as changing to a far airport
+    s.setFollow(''); s.ingest([{ hex: 'f0f0f0', flight: 'FAR4321 ', lat: s.pose.lat + 6, lon: s.pose.lon + 6, alt_baro: 35000, gs: 450, track: 90, seen_pos: 0 }], 0, 1);
+    await wait(300); s.setFollow('FAR4321'); r.far = { kind: s.shot.kind, jump: !!s.shot.jump, plane: s.shot.plane && s.shot.plane.hex };
+    // a flight not found yet: the view stays where it is, and the flight takes the camera once it turns up
+    s.setFollow(''); s.lockOn(p); s.setFollow('NEW4321'); r.looking = { owner: s.cameraOwner(), held: s.hold(), lockedOn: s.shot.plane === p };
+    s.ingest([{ hex: 'f1f1f1', flight: 'NEW4321 ', lat: s.pose.lat + 0.05, lon: s.pose.lon + 0.05, alt_baro: 9000, gs: 250, track: 180, seen_pos: 0 }], 0, 1);
+    await wait(300); await s.followTick(); r.found = { owner: s.cameraOwner(), kind: s.shot.kind, plane: s.shot.plane && s.shot.plane.hex, held: s.hold() };
+    s.setFollow(''); s.autoTour(); return r;
+  });
+  ok('Follow goes straight to the flight, from the tour, a locked aircraft or fly mode, without a stop at the center airport',
+    fw.near && fw.near.kind === 'follow' && fw.near.same && !fw.near.jump && fw.near.owner === 'follow' && fw.fromLock === 'follow:follow' && fw.fromFly === 'follow:follow', JSON.stringify(fw));
+  ok('a flight far away gets the same move as changing to a far airport', fw.far && fw.far.kind === 'follow' && fw.far.jump && fw.far.plane === 'f0f0f0', JSON.stringify(fw.far));
+  ok('a flight not found yet keeps the view where it is, then takes the camera when found', fw.looking && fw.looking.owner === 'lock' && fw.looking.held && fw.looking.lockedOn && fw.found.owner === 'follow' && fw.found.kind === 'follow' && fw.found.plane === 'f1f1f1' && !fw.found.held, JSON.stringify(fw));
   await hb.close();
   // the old fly-only setting carries over: Never stays Never, any other choice becomes 3 minutes
   const carried = [];
