@@ -1,4 +1,4 @@
-# Build notes: version 3.12 (November 20, 2026)
+# Build notes: version 3.12.1 (November 20, 2026)
 
 Written for whoever picks this up next, including a code reviewer. It records what is done, what is left in order, why some choices were made, and how to build and test. Version 3.7 is pull request https://github.com/Deaconcg65/sky3d/pull/2 (branch v3.7-watch-list into main). Version 3.6 was pull request 1, merged November 15.
 
@@ -9,6 +9,20 @@ The audience is plane geeks, and detail is key to them. For shapes, captions and
 ## What this version is
 
 A self-contained 3D web page that shows live aircraft from a home Raspberry Pi ADS-B receiver (readsb and tar1090). Two editions are built from one source: the home edition (antenna only) and the network edition (antenna plus public flight networks, through the relay in relay/relay.py). The page is shared on the internet at skypuppy3d.com through a Cloudflare tunnel, so treat every viewer as untrusted.
+
+## Version 3.12.1 (November 20, 2026): the tour waits after you take over
+
+Branch v3.12.1-pause, built on main after 3.12 merged (8b25c87). Chris, November 20: "the automatic zoom in and out and move from plane to plane stops when I use the mouse of keyboard to navigate to other flights and restarts after some period of time like 1 minute, 3 minutes, 5 minutes, never".
+- One setting, "Go back to the auto tour after I take over": after a minute, 3 minutes (the default), 5 minutes, or never. It replaces the 3.6 setting that only covered fly mode (15 seconds to 2 minutes, default 30 seconds). A viewer who had chosen Never there keeps Never; any other choice becomes 3 minutes.
+- Taking over is flying (dragging, a real turn of the wheel, the arrow keys, F, plus and minus), double-clicking an aircraft, picking one in search, or clicking an aircraft while the tour runs. The wait counts from the last touch: each drag, key or zoom in fly mode starts it again.
+- While the wait runs, the tour does not pull back or glide to another aircraft. A locked aircraft (double click or search) now goes back to the tour after the wait too; before, it stayed until the aircraft was gone, which Never keeps.
+- A, W, N and Escape hand the camera back at once, as before. Follow is not taking over: a followed flight keeps the camera as it did, and the wait applies only to what the viewer did.
+- Code: src/main.js (tookOver, handBackDue, viewerHolds; hold() now includes the wait). Settings in src/template.html (#f-handback). Browser checks in tools/controls.js use ?handBack=60 and move the clock with __sky.tookOver.
+- Follow goes straight to the flight (Chris, November 23, testing: "when I'm tracking a plane or want to, the map first returns to the centering airport and then to the plane I'm looking to track. I expect that the tracker moves directly to the plane to be tracked. If the distance is extremely far the map pulls out and zooms in like changing airports"). Cause: asking to follow from a locked aircraft or fly mode handed the camera to the tour, which starts with a wide shot back at the center airport, and the followed flight then waited for that shot to finish before taking over (up to 9 seconds, longer if the flight had to be found on the networks first). Now:
+  - A flight that is already in the sky takes the camera the moment Follow is asked for, from the tour, a locked aircraft or fly mode, and the camera moves from where it is straight to the flight.
+  - A flight that has to be found first leaves the camera where it is for up to a minute (the tour does not move on), then takes it when found. If the viewer flies or locks on another aircraft meanwhile, the found flight waits for Escape as before.
+  - A flight more than 60 km (about 32 nm) away gets the same move as changing to a far airport: the camera rises, the view fades across, and it comes down at the flight (a fade only with Reduce motion on). Nearer flights glide as before.
+  - Code: src/main.js (setFollow, follow.claim and claiming(), followTick, startFollow, the follow case in updateCamera, hold()). Browser checks in tools/controls.js: straight from the tour, a locked aircraft and fly mode; a far flight jumps; a flight not found yet keeps the view, then takes the camera.
 
 ## Version 3.12 (November 20, 2026): the aircraft gallery, military paint, fun paint
 
@@ -148,6 +162,7 @@ Chris reported that My places did not save, on the receiver's own (http) address
      - Business jets: the Gulfstream's large oval cabin windows, the Citation's smaller round ones, cockpit windows to match.
      - Light singles: a high wing (Cessna 172) or low wing (Cirrus SR22, Piper), the windshield and side windows of a four-seat cabin, fixed gear.
      - Helicopters: the bubble or glass nose, side windows, skids or wheels as the type has them.
+   - Version 3.12.1, the tour waits after you take over (Chris, November 20), built (see Version 3.12.1 above). It goes before the phone view because it is small and pairs with the 3.14 tour mode, which uses the same wait.
    - Version 3.13, phone view: a page on skypuppy3d.com sized for a phone that lists flights in order of distance from the phone's own position, using the browser's location permission (needs https, which the shared address has). If location is refused, it falls back to the antenna's spot. Same Cloudflare Access sign-in as now. The phone's position stays on the phone: the list is sorted in the browser, and only the usual rounded view center goes to the relay.
    - Version 3.14, wall display: a full-screen board for a TV or monitor in the spirit of theflightwall.com. It shows the nearest few aircraft with callsign, airline, type, route, altitude and speed, set to a home location, with no controls, readable from across a room. It cycles through the flights overhead from closest to farthest, over your location or one you set, and can instead track one flight.
      Tour mode, Mac screensaver and smart TV (Chris, November 20: "turn skypuppy3d into a screensaver for my Mac, randomly flying to different airports over time" and "easy to put up on our smart tv"). Part of 3.14, after the gallery and the phone view. Notes from checking, November 20:

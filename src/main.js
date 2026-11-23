@@ -20,14 +20,20 @@ const PRESETS = [
 ];
 if (__NET__) PRESETS.push(['KBOS', 'Boston'], ['KMKE', 'Milwaukee'], ['KPHL', 'Philadelphia'], ['KDCA', 'Washington National'], ['KATL', 'Atlanta'], ['KMIA', 'Miami'], ['KORD', 'Chicago O\'Hare'], ['KDFW', 'Dallas Fort Worth'],
   ['KDEN', 'Denver'], ['KLAX', 'Los Angeles'], ['KSFO', 'San Francisco'], ['KSEA', 'Seattle']);
-const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr', src: 'blend', relay: '', netmax: 130, clickSecs: 15, flyBack: 30, places: [], keep: null, watch: null, watchSound: true, watchNote: false, sat: false, fun: '' };
+const DEFAULTS = { center: 'MID', other: '', radius: 30, follow: '', pace: 20, captions: true, sky: 'real', trail: 5, wx: 'real', corner: true, lights: 'arr', src: 'blend', relay: '', netmax: 130, clickSecs: 15, handBack: 180, places: [], keep: null, watch: null, watchSound: true, watchNote: false, sat: false, fun: '' };
 // SHARED: the page was opened at a secure web address, which is how a receiver is shared with people outside the house.
 // At home it is opened at the receiver's own plain address.
 const SHARED = Q.has('shared') ? Q.get('shared') !== '0' : location.protocol === 'https:';
 const ANT = SHARED ? "this site's antenna" : 'your antenna';
 const S = Object.assign({}, DEFAULTS);
-try { Object.assign(S, JSON.parse(localStorage.getItem('sky3d') || '{}')); } catch (e) { /* storage unavailable */ }
+let stored = {}; try { stored = JSON.parse(localStorage.getItem('sky3d') || '{}') || {}; Object.assign(S, stored); } catch (e) { /* storage unavailable */ }
 for (const k of Object.keys(DEFAULTS)) if (Q.has(k) && typeof DEFAULTS[k] !== 'object') { const v = Q.get(k); S[k] = typeof DEFAULTS[k] === 'number' ? +v : typeof DEFAULTS[k] === 'boolean' ? v !== '0' && v !== 'false' : v; }
+// version 3.12.1: one wait before the auto tour takes the camera back, for every way of taking it over. It replaces the wait after
+// flying (flyBack); a viewer who had chosen Never there keeps Never.
+const HANDBACK = [60, 180, 300, 0];
+if (stored.handBack === undefined && stored.flyBack === 0 && !Q.has('handBack')) S.handBack = 0;
+if (HANDBACK.indexOf(S.handBack) === -1) S.handBack = DEFAULTS.handBack;
+delete S.flyBack;
 if (typeof S.fun !== 'string' || (S.fun && S.fun !== 'random' && !FUN[S.fun])) S.fun = '';   // version 3.12: fun paint, plain unless chosen
 // The viewer's own places ("My House" and so on). They live in this browser and nowhere else: they are never sent to the
 // receiver or saved on it. On a shared address they are not even kept in the browser unless the viewer asks for that, so
@@ -693,7 +699,11 @@ function pickLeg(rt, p) {
   if (at < ap.length - 1 && (p.vrate > 300 || at === 0)) return [ap[at], ap[at + 1]];
   return loop ? legAloft(ap, p) : [first, last];
 }
-const follow = { want: '', reg: '', hex: null, lastRemote: 0, state: 'off', since: 0, netOk: true, tour: false };   // tour: the viewer pressed A, so the followed flight waits
+const follow = { want: '', reg: '', hex: null, lastRemote: 0, state: 'off', since: 0, netOk: true, tour: false, claim: 0 };   // tour: the viewer pressed A, so the followed flight waits
+// claim (version 3.12.1): until when a Follow the viewer asked for, whose flight is not found yet, holds the camera, or 0. For up to CLAIM_SECS the camera
+// stays where it is, rather than gliding back to the center airport, and the flight takes the camera the moment it is found.
+const CLAIM_SECS = 60;
+const claiming = () => follow.claim > nowS();
 // Follow has the camera only while a flight is found and the viewer has not paused it with A
 function followOwns() { return follow.state === 'on' && !follow.tour; }
 function parseFlight(s) {
@@ -706,8 +716,12 @@ function setFollow(text) {
   const dashed = String(text || '').toUpperCase().replace(/[^A-Z0-9-]/g, '');
   follow.tour = false; follow.want = parseFlight(text); follow.reg = /^[A-Z0-9]{1,3}-[A-Z0-9]{1,5}$/.test(dashed) ? dashed : ''; follow.hex = null; follow.state = follow.want ? 'looking' : 'off'; follow.since = nowS(); follow.lastRemote = 0;
   S.follow = follow.reg || follow.want; save(); $('f-flight').value = S.follow; $('f-stop').hidden = !follow.want;
-  const o = cameraOwner(); if (follow.want && (o === 'lock' || o === 'fly')) leaveControls();   // a flight the viewer asks to follow takes the camera from a locked aircraft or fly mode
-
+  follow.claim = 0; if (!follow.want) return;
+  // a flight the viewer asks to follow takes the camera straight away, from wherever it is (the tour, a locked aircraft, fly mode),
+  // and goes straight to that flight. One that is not found yet takes it once it is found (followTick); until then the camera stays put.
+  const p = matchFollow();
+  if (p) { follow.hex = p.hex; follow.state = 'on'; takeCamera('follow'); }
+  else follow.claim = nowS() + CLAIM_SECS;
 }
 // Follow and the watch list recognize an aircraft the same way: callsign, reported registration, registration from the
 // aircraft table, or hex code, with dashes ignored
@@ -722,6 +736,8 @@ async function followTick() {
   if (!follow.want) return; const t = nowS();
   const p = matchFollow();
   if (p) { follow.hex = p.hex; follow.state = 'on'; }
+  if (p && claiming() && !follow.tour) { const o = cameraOwner(); if (o === 'fly' || o === 'lock') takeCamera('follow'); }
+  if (p) follow.claim = 0;   // the tour hands over by itself in updateCamera
   const needNet = !p || p.remote;
   if (needNet && t - follow.lastRemote > (p ? 5 : 12)) {
     follow.lastRemote = t;
@@ -878,7 +894,12 @@ let paused = false; const recent = [];
 const fly = { lat: 0, lon: 0, alt: 0, az: 200, el: 25, dist: 100, last: 0, since: 0, keysAt: -1e9 };
 const held = new Set();                 // keys held down right now
 let clicked = null, clickUntil = 0;     // an aircraft the viewer clicked, and when its details go away again
-const hold = () => paused || nowS() < clickUntil;
+// Version 3.12.1: when the viewer last took the camera over (a click on an aircraft, a double click, a search result, a place,
+// flying), or 0 when the tour has it back. The tour waits the chosen time (S.handBack, 0 for never) before it moves on again.
+let tookOver = 0;
+const handBackDue = (since) => S.handBack > 0 && nowS() - since > S.handBack;
+const viewerHolds = () => tookOver > 0 && !handBackDue(tookOver);
+const hold = () => paused || nowS() < clickUntil || viewerHolds() || claiming();   // a Follow still looking for its flight keeps the tour where it is
 function wideDist() { const r = radiusKm() || 150; return clamp(r * 2.5, 75, 420); }
 function begin(kind, dur, plane) {
   const t = nowS(), blending = prevShot && t - shot.t0 < shot.dur;
@@ -888,7 +909,12 @@ function begin(kind, dur, plane) {
 }
 function goWide() { begin('wide', 9); shot.hold = 6; hideCaption(); }
 function startVisit(p) { begin('visit', 10, p); recent.push(p.hex); while (recent.length > 5) recent.shift(); prepareCaption(p); }
-function startFollow(p) { begin('follow', clamp(9 + gcDist(pose.lat, pose.lon, p.rLat, p.rLon) / 50, 11, 24), p); prepareCaption(p); }
+// A flight far from where the camera is gets the same move as changing to a far airport: rise, fade across, come down (applyCenter)
+function startFollow(p) {
+  const drawn = p.tFrame !== undefined, far = gcDist(pose.lat, pose.lon, drawn ? p.rLat : p.lat, drawn ? p.rLon : p.lon);   // an aircraft not drawn yet has no drawn position
+  if (far > JUMP_KM) { begin('follow', calm() ? 3 : 8, p); shot.jump = true; } else begin('follow', clamp(9 + far / 50, 11, 24), p);
+  prepareCaption(p);
+}
 // ---------- who has the camera ----------
 // The camera has one owner at a time, and this is the only place that says which:
 //   fly     the viewer has the controls (F, an arrow key, a drag)
@@ -900,6 +926,8 @@ function startFollow(p) { begin('follow', clamp(9 + gcDist(pose.lat, pose.lon, p
 function cameraOwner() { return shot.kind === 'fly' ? 'fly' : shot.lock ? 'lock' : followOwns() && planes.get(follow.hex) ? 'follow' : 'tour'; }
 function takeCamera(owner, p) {
   const t = nowS();
+  tookOver = owner === 'fly' || owner === 'lock' ? t : 0;   // flying or a locked aircraft is taking over; the tour or Follow hands it back
+  if (owner === 'fly' || owner === 'lock') follow.claim = 0;   // the viewer took the camera after asking to follow: a flight found later waits for Escape
   if (owner === 'fly') {
     fly.last = t; if (shot.kind === 'fly') return;
     Object.assign(fly, { lat: pose.lat, lon: pose.lon, alt: pose.alt, az: pose.az, el: pose.el, dist: pose.dist, since: t, keysAt: -1e9 });   // a new time at the controls starts with no key pressed: a key sets it again just after
@@ -915,7 +943,7 @@ function enterFly() { takeCamera('fly'); }
 // Zoom in on one aircraft and stay with it until the viewer says otherwise (double click, a search result)
 function lockOn(p) { takeCamera('lock', p); }
 // A hands the camera to the tour and pauses Follow until a flight is followed again
-function autoTour() { if (follow.want) follow.tour = true; takeCamera('tour'); }
+function autoTour() { if (follow.want) follow.tour = true; follow.claim = 0; takeCamera('tour'); }
 // leaving fly mode or a locked aircraft: go back to following a flight if one is being followed, otherwise to the tour
 function leaveControls() { takeCamera(followOwns() && planes.get(follow.hex) ? 'follow' : 'tour'); }
 function flyStep(dt) {
@@ -975,6 +1003,7 @@ function clickAt(x, y) {
   const p = near || planeAt(x, y);
   if (!p) { clickUntil = 0; return; }   // a click on empty sky puts the details away
   clicked = p; clickUntil = nowS() + S.clickSecs; prepareCaption(p);
+  if (cameraOwner() === 'tour') tookOver = nowS();   // a click on an aircraft keeps the tour where it is, so it does not glide off while the viewer looks
 }
 function updatePick() {
   const ring = $('pick'), p = clicked && nowS() < clickUntil ? clicked : null;
@@ -1031,10 +1060,13 @@ function updateCamera(t) {
   // what to look at next
   const el = t - shot.t0;
   const owner = cameraOwner();
-  if (owner === 'fly') { if (S.flyBack > 0 && t - fly.last > S.flyBack) leaveControls(); }
-  else if (owner === 'lock') { const lp = shot.plane; if (!lp || !planes.has(lp.hex) || lp.opacity < 0.25 || !lp.fresh(t)) leaveControls(); }
+  if (tookOver && owner !== 'fly' && owner !== 'lock' && !viewerHolds()) tookOver = 0;   // the wait after a click is over: the tour has the camera back
+  if (owner === 'fly') { if (handBackDue(fly.last)) leaveControls(); }
+  else if (owner === 'lock') { const lp = shot.plane; if (!lp || !planes.has(lp.hex) || lp.opacity < 0.25 || !lp.fresh(t) || handBackDue(tookOver)) leaveControls(); }
   else if (owner === 'follow') {
-    if (shot.kind !== 'follow' || shot.plane !== planes.get(follow.hex)) { if (el > shot.dur) startFollow(planes.get(follow.hex)); }
+    // a new Follow goes straight to the flight, without first finishing a tour shot (which may be gliding back to the center airport)
+    if (shot.kind !== 'follow') startFollow(planes.get(follow.hex));
+    else if (shot.plane !== planes.get(follow.hex)) { if (el > shot.dur) startFollow(planes.get(follow.hex)); }
     else if (el > shot.dur && t - shot.tSub > 38) { livePose(shot, t, TP); shot.subFrom = [TP.dist, TP.el]; shot.sub++; shot.tSub = t; shot.subT = t; }
   } else if (shot.kind === 'wide') {
     if (el > shot.dur + shot.hold && !hold()) { const p = pickNext(); if (p) startVisit(p); }
@@ -1369,7 +1401,7 @@ function initPanel() {
   $('f-radius').onchange = (e) => { S.radius = +e.target.value; save(); ground.setRing(C.lat, C.lon, radiusKm());  };
   $('f-pace').onchange = (e) => { S.pace = +e.target.value; save(); };
   $('f-click').value = String(S.clickSecs); $('f-click').onchange = (e) => { S.clickSecs = +e.target.value; save(); };
-  $('f-flyback').value = String(S.flyBack); $('f-flyback').onchange = (e) => { S.flyBack = +e.target.value; save(); };
+  $('f-handback').value = String(S.handBack); $('f-handback').onchange = (e) => { S.handBack = +e.target.value; save(); };
   fillKeys(); $('help').onclick = () => toggleHelp(false); $('mine-close').onclick = () => closeMine();
   $('findbtn').onclick = () => { $('findbtn').blur(); openFind(); };
   $('photobtn').onclick = () => { $('photobtn').blur(); openPhoto(); }; $('photo-close').onclick = () => closePhoto();
@@ -1445,11 +1477,11 @@ function initPanel() {
     if (!$('find').hidden) return;
     if (e.repeat && !flying && (k === 'f' || k.indexOf('Arrow') === 0)) return;   // a key held down from before Escape must not take the controls again
     // clicked details are ended by clickUntil = 0, so updateCaption puts the current shot's caption back even when Follow keeps the camera
-    const nextAircraft = () => { clickUntil = 0; paused = false; const p = pickNext(); if (p && !followOwns()) startVisit(p); };
+    const nextAircraft = () => { clickUntil = 0; paused = false; tookOver = 0; const p = pickNext(); if (p && !followOwns()) startVisit(p); };
     if (k === ' ') { paused = !paused; e.preventDefault(); }
     else if (k === 'n' || (k === 'ArrowRight' && !flying)) nextAircraft();
     else if (k === 'a' || k === 'A') autoTour();
-    else if (k === 'w' || k === 'W') { clickUntil = 0; paused = false; if (!followOwns() || flying || shot.lock) goWide(); }
+    else if (k === 'w' || k === 'W') { clickUntil = 0; paused = false; tookOver = 0; if (!followOwns() || flying || shot.lock) goWide(); }
     else if (k === 'f') { enterFly(); fly.keysAt = nowS(); }
     else if (k === 'F') { if (document.fullscreenElement) document.exitFullscreen(); else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {}); }
     else if (k === '+' || k === '=') { zoomFly(0.8); fly.keysAt = nowS(); }
@@ -1478,7 +1510,7 @@ function escapeKey() {
   else if (!$('mine').hidden) closeMine();
   else if (document.body.classList.contains('panel')) togglePanel(false);
   else if (cameraOwner() === 'fly' || cameraOwner() === 'lock') leaveControls();
-  else if (clicked) clickUntil = 0;
+  else if (clicked || tookOver) { clickUntil = 0; tookOver = 0; }   // version 3.12.1: Escape after a click also starts the tour again at once
 }
 // ---------- the mouse: drag to look around, wheel to zoom, click for details, double click to stay with an aircraft ----------
 function canvasControls() {
@@ -1518,7 +1550,7 @@ const HELP = [
   ['F', 'Fly: take the controls. Drag with the mouse to look around'],
   ['Arrow keys', 'In fly mode, up and down move forward and back, left and right turn. Hold Shift with up or down to climb or descend'],
   ['+ and -', 'Zoom in and out. The mouse wheel does too'],
-  ['Click', 'Click an aircraft to see its details for a while'],
+  ['Click', 'Click an aircraft to see its details for a while. The auto tour waits while you look around, for as long as the settings say'],
   ['Double click', 'Zoom in on an aircraft and stay with it'],
   ['P', 'My places: pick one to move the sky there'],
   ['/', 'Search by airline, flight number, tail number, plane type, origin or destination'],
@@ -1727,7 +1759,7 @@ if (S.follow) setFollow(S.follow);
 if (!MANUAL) { poll(); setInterval(followTick, 1000); setInterval(watchTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { MODELS, get gallery() { return gallery; }, setFun, openGallery, paintOf, get home() { return home; }, set home(v) { home = v; }, save, modelFor, routeHtml, partnerOf, altWords, updateCaption, prepareCaption, get capPlane() { return capPlane; }, cameraOwner, leaveControls, airportLabelAt, centerOnAirport, get labels() { return labels; }, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { get tookOver() { return tookOver; }, set tookOver(v) { tookOver = v; }, hold, MODELS, get gallery() { return gallery; }, setFun, openGallery, paintOf, get home() { return home; }, set home(v) { home = v; }, save, modelFor, routeHtml, partnerOf, altWords, updateCaption, prepareCaption, get capPlane() { return capPlane; }, cameraOwner, leaveControls, airportLabelAt, centerOnAirport, get labels() { return labels; }, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
   net, NET: __NET__ };

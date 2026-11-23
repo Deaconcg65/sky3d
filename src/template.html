@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3.12, /*EDITION*/.
+  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3.12.1, /*EDITION*/.
   One self-contained page. Put it on the receiver's web server and open it in a browser.
   Includes three.js (c) 2010-2024 three.js authors, MIT License.
   Shorelines: GSHHG (Wessel and Smith, LGPL) and Natural Earth (public domain). State lines: United States Census Bureau.
@@ -270,8 +270,9 @@ body.shared #panel .home-only { display: none; }
   <label for="f-click">Details stay on screen after a click</label>
   <select id="f-click"><option value="8">8 seconds</option><option value="15">15 seconds</option><option value="30">30 seconds</option><option value="60">A minute</option></select>
 
-  <label for="f-flyback">Return to the auto tour after flying</label>
-  <select id="f-flyback"><option value="15">After 15 seconds of no input</option><option value="30">After 30 seconds</option><option value="60">After a minute</option><option value="120">After 2 minutes</option><option value="0">Never</option></select>
+  <label for="f-handback">Go back to the auto tour after I take over</label>
+  <select id="f-handback"><option value="60">After a minute</option><option value="180">After 3 minutes</option><option value="300">After 5 minutes</option><option value="0">Never</option></select>
+  <div class="note">Taking over is flying with the mouse, the wheel or the arrow keys, clicking or double-clicking an aircraft, or picking one in search. The wait counts from the last time you touched the controls. A starts the tour again at any time.</div>
 
   <label for="f-sky">Sky</label>
   <select id="f-sky"><option value="real">Follows the real time of day</option><option value="dawn">Always dawn</option><option value="day">Always day</option><option value="dusk">Always dusk</option><option value="night">Always night</option></select>
@@ -300,7 +301,7 @@ body.shared #panel .home-only { display: none; }
 
   <hr>
   <dl id="keys-dl"></dl>
-  <p class="note" style="margin-top:22px">Version 3.12, /*EDITION*/, November 20, 2026</p>
+  <p class="note" style="margin-top:22px">Version 3.12.1, /*EDITION*/, November 20, 2026</p>
 </aside>
 <script type="application/json" id="geo-data">/*GEO*/</script>
 <script type="application/json" id="airport-data">/*AIRPORTS*/</script>
