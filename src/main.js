@@ -1713,7 +1713,7 @@ function togglePanel(on) {
 }
 
 // ---------- frame loop ----------
-let fpsN = 0, fpsT = nowS(), slow = 0; const bootT = nowS();
+let fpsN = 0, fpsT = nowS(), slow = 0, frameN = 0; const bootT = nowS();
 let renderNext = true, lastT = nowS(), lookT = -100, simClock = Q.has('time') ? new Date(Q.get('time')) : null;
 const A3 = new THREE.Vector3();
 function applySat() { sat.setOn(S.sat); $('satcredit').hidden = !S.sat; satT = -100; satNote(); }
@@ -1722,6 +1722,7 @@ function satNote() {
   if (n._t !== text) { n._t = text; n.textContent = text; }
 }
 function frame() {
+  frameN++;
   const t = nowS(), dt = clamp(t - lastT, 0.001, 0.25); lastT = t;
   flyStep(dt); updateCamera(t);
   const date = simClock || new Date();
@@ -1770,7 +1771,7 @@ if (S.follow) setFollow(S.follow);
 if (!MANUAL) { poll(); setInterval(followTick, 1000); setInterval(watchTick, 1000); if (__NET__) { netTick(true); setInterval(netTick, 1000); } }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setTimeout(() => location.reload(), 1500); });
 try { if (navigator.wakeLock) { const lock = () => navigator.wakeLock.request('screen').catch(() => {}); lock(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lock(); }); } } catch (e) { /* not supported */ }
-window.__sky = { get towns() { return towns; }, whereLine, get tookOver() { return tookOver; }, set tookOver(v) { tookOver = v; }, hold, MODELS, get gallery() { return gallery; }, setFun, openGallery, paintOf, get home() { return home; }, set home(v) { home = v; }, save, modelFor, routeHtml, partnerOf, altWords, updateCaption, prepareCaption, get capPlane() { return capPlane; }, cameraOwner, leaveControls, airportLabelAt, centerOnAirport, get labels() { return labels; }, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
+window.__sky = { get frameN() { return frameN; }, netCenter, get findPick() { return findList[findSel]; }, get towns() { return towns; }, whereLine, get tookOver() { return tookOver; }, set tookOver(v) { tookOver = v; }, hold, MODELS, get gallery() { return gallery; }, setFun, openGallery, paintOf, get home() { return home; }, set home(v) { home = v; }, save, modelFor, routeHtml, partnerOf, altWords, updateCaption, prepareCaption, get capPlane() { return capPlane; }, cameraOwner, leaveControls, airportLabelAt, centerOnAirport, get labels() { return labels; }, sat, applySat, applyCenter, routeLeg, getRoute, prefetchRoutes, fly, enterFly, lockOn, autoTour, clickAt, planeAt, openFind, openMine, routes, held, get clicked() { return clicked; }, get paused() { return paused; }, wxNow, wxInfo, weather, sky, sunNow, planes, pose, renderer, PlaneMesh, paintFor, ingest, get shot() { return shot; }, reorigin, project, S, follow, ground, scene, camera, proj, look, trails, startVisit, goWide, setFollow, followTick, matchFollow, watchTick, watchState, watch, addWatch, dismissWatch, lookPlace, setTime: (d) => { simClock = d ? new Date(d) : null; lookT = -100; },
   step: (dt, render) => { vt += dt; renderNext = !!render; frame(); },
   feed: async (T) => { fakeT = T; if (Q.get('noant') !== '1') { const d = await getJSON((dataBase || DATA_BASES[0]) + 'aircraft.json?t=' + T); if (!dataBase) { dataBase = DATA_BASES[0]; ingest(d.aircraft, d.now); lastGood = nowS(); await afterFirstData(); } else { ingest(d.aircraft, d.now); lastGood = nowS(); } } if (__NET__) await netTick(); },
   net, NET: __NET__ };

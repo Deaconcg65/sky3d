@@ -66,8 +66,10 @@ const { chromium } = require('playwright');
   const aria = await page.evaluate(() => ({ ad: document.getElementById('find-q').getAttribute('aria-activedescendant'), sel: document.querySelector('#find li[aria-selected=true]') && document.querySelector('#find li[aria-selected=true]').id }));
   ok('search exposes the active result', aria.ad === aria.sel && !!aria.ad, JSON.stringify(aria));
   // 5. stale aircraft chosen
-  await page.evaluate(() => { for (const p of window.__sky.planes.values()) if ((p.flight || '').startsWith('DAL')) p.tPos -= 200; });
-  await page.keyboard.press('Enter'); await page.waitForTimeout(500);
+  // the aircraft in the chosen row goes stale and Enter is pressed in the same moment, so a list refreshed in between (every two
+  // seconds), or a regional flying for Delta in the chosen row, cannot hand Enter a fresh aircraft instead
+  await page.evaluate(() => { const s = window.__sky, p = s.findPick; if (p) p.tPos -= 200; document.getElementById('find-q').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); });
+  await page.waitForTimeout(500);
   ok('stale aircraft: no lock, search stays open', await page.evaluate(() => !window.__sky.shot.lock && !document.getElementById('find').hidden), await page.evaluate(() => document.getElementById('find-note').textContent.slice(0, 50)));
   await page.keyboard.press('Escape');
   // 6 short screen
@@ -587,10 +589,13 @@ const { chromium } = require('playwright');
   // the count in the corner: the antenna's own aircraft are counted at home, and not while the sky shown is far away
   const atHome = await rel.evaluate(() => document.getElementById('k-src').textContent);
   const hadHome = await rel.evaluate(() => { const s = window.__sky, had = s.home; if (!had) s.home = { lat: 41.16, lon: -73.13 }; s.S.center = 'OTHER'; s.S.other = 'KLAX'; s.applyCenter(false); return !!had; });   // a receiver in Connecticut, where the stand-in antenna is
-  await rel.waitForTimeout(3000);
+  // the corner is written every two seconds; on a busy computer that can take longer, so wait for it (up to 20 seconds)
+  await rel.waitForFunction(() => /far from here/.test(document.getElementById('k-src').textContent), null, { timeout: 20000 }).catch(() => {});
   const farAway = await rel.evaluate(() => document.getElementById('k-src').textContent);
+  const farWhy = await rel.evaluate(() => { const s = window.__sky, m = s.netCenter(); return { mid: [+m.lat.toFixed(2), +m.lon.toFixed(2)], home: s.home && [s.home.lat, s.home.lon], center: s.S.center + ' ' + s.S.other, follow: s.follow.state, owner: s.cameraOwner(), frames: s.frameN }; });
+  await rel.waitForTimeout(1000); farWhy.framesLater = await rel.evaluate(() => window.__sky.frameN);
   await rel.evaluate((had) => { const s = window.__sky; if (!had) s.home = null; s.S.center = 'MID'; s.S.other = ''; s.applyCenter(false); }, hadHome);
-  ok('the corner counts the antenna aircraft at home, and says the antenna is far away while the sky shown is somewhere else', / by /.test(atHome) && /far from here/.test(farAway) && !/ by /.test(farAway), JSON.stringify({ atHome, farAway }));
+  ok('the corner counts the antenna aircraft at home, and says the antenna is far away while the sky shown is somewhere else', / by /.test(atHome) && /far from here/.test(farAway) && !/ by /.test(farAway), JSON.stringify({ atHome, farAway, farWhy }));
   // a question to the flight network that is never answered is given up after 15 seconds, so the page asks again, and the corner
   // stops counting the network as answering; once the network answers again its aircraft come back
   await rel.evaluate(() => fetch('/ctl/hangnet?on=1')); await rel.waitForTimeout(18000);
@@ -634,7 +639,7 @@ const { chromium } = require('playwright');
   await satBad.close();
   // a short outage after some photos loaded: the missing ones are asked for again, when switched off and on and a minute later by themselves
   const satSome = await browser.newPage({ viewport: { width: 960, height: 540 } }); satSome.on('pageerror', (e) => errs.push('PAGEERROR (satellite outage): ' + e.message));
-  await sim('/ctl/satsome?down=1'); await satSome.goto(PAGE + '&sat=1&satApi=/mock/satsome/{z}/{y}/{x}.png');
+  await sim('/ctl/satsome?down=1'); await satSome.goto(PAGE + '&sat=1&satApi=/mock/satsome/{z}/{y}/{x}.png', { waitUntil: 'domcontentloaded', timeout: 90000 }).catch((e) => errs.push('the satellite outage page took too long to open: ' + e.message.split('\n')[0]));
   await satSome.waitForFunction(() => { const g = window.__sky && window.__sky.sat; return g && g.loaded > 0 && !g.busy && !g.queue.length && [...g.cache.values()].some((t) => t.bad); }, null, { timeout: 45000 }).catch(() => {});
   const holes = () => satSome.evaluate(() => { const g = window.__sky.sat; return { loaded: g.loaded, failed: g.failed, asked: g.asked, down: g.down, holes: [...g.cache.values()].filter((t) => t.bad && g.want.has(t.k)).length }; });
   const part = await holes();
