@@ -899,7 +899,7 @@ let clicked = null, clickUntil = 0;     // an aircraft the viewer clicked, and w
 // flying), or 0 when the tour has it back. The tour waits the chosen time (S.handBack, 0 for never) before it moves on again.
 let tookOver = 0;
 const handBackDue = (since) => S.handBack > 0 && nowS() - since > S.handBack;
-const viewerHolds = () => tookOver > 0 && !handBackDue(tookOver);
+const viewerHolds = () => tookOver !== 0 && !handBackDue(tookOver);   // any set hold counts, even one from the first seconds after the page opened
 const hold = () => paused || nowS() < clickUntil || viewerHolds() || claiming();   // a Follow still looking for its flight keeps the tour where it is
 function wideDist() { const r = radiusKm() || 150; return clamp(r * 2.5, 75, 420); }
 function begin(kind, dur, plane) {

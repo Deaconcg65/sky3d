@@ -569,10 +569,11 @@ const { chromium } = require('playwright');
   await ph.keyboard.press('Escape');
   const shut = await ph.evaluate(() => document.getElementById('photo').hidden);
   // the same aircraft under another identity: one with no photo, and one whose answer points somewhere other than Planespotters
-  const tryHex = (hex) => ph.evaluate(async (h) => { const s = window.__sky, p = s.capPlane, was = p.hex; p.hex = h; document.getElementById('photobtn').click();
+  // the registration is changed too (to one Planespotters has no photo of), since the page rightly asks by registration when the transponder code finds nothing
+  const tryHex = (hex) => ph.evaluate(async (h) => { const s = window.__sky, p = s.capPlane, was = p.hex, wasReg = p.reg, wasInfo = p.info && p.info.reg; p.hex = h; p.reg = 'N00000'; if (p.info) p.info.reg = 'N00000'; document.getElementById('photobtn').click();
     for (let i = 0; i < 40 && /Looking/.test(document.getElementById('photo-note').textContent); i++) await new Promise((r) => setTimeout(r, 250));
     const out = { note: document.getElementById('photo-note').textContent, credit: document.getElementById('photo-credit').hidden, src: document.getElementById('photo-img').getAttribute('src') };
-    document.getElementById('photo-close').click(); p.hex = was; return out; }, hex);
+    document.getElementById('photo-close').click(); p.hex = was; p.reg = wasReg; if (p.info) p.info.reg = wasInfo; return out; }, hex);
   const none = await tryHex('eeeee0'), evil = await tryHex('bad001');
   ok('Escape closes the photo, an aircraft with no photo says so, and a photo from anywhere but Planespotters is not shown', shut && /no photo/.test(none.note) && none.credit && !none.src && /no photo/.test(evil.note) && evil.credit && !evil.src, JSON.stringify({ shut, none, evil }));
   await ph.close();
