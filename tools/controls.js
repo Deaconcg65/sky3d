@@ -406,6 +406,24 @@ const { chromium } = require('playwright');
     return { got: s.clicked === p, same: before === s.S.center + ':' + s.S.other };
   });
   ok('a click right on an aircraft shows that aircraft and does not move the sky', planeFirst.got && planeFirst.same, JSON.stringify(planeFirst));
+  // the ring round a clicked aircraft sits on it even when the camera has just turned, as it does every frame while it moves.
+  // Within one frame the camera is moved and turned first and its matrices are brought up to date only when the frame is drawn,
+  // so the ring is placed here right after a turn that has not been drawn yet, the way a slow phone sees it (Chris, November 25)
+  const ringOn = await page.evaluate(() => {
+    const s = window.__sky, cam = s.camera; cam.updateMatrixWorld();
+    const p = [...s.planes.values()].find((q) => { if (q.lat === null || q.opacity < 0.5) return false; const v = q.pos.clone().project(cam); return v.z < 1 && v.z > -1 && Math.abs(v.x) < 0.5 && Math.abs(v.y) < 0.5; });
+    if (!p) return { none: true };
+    const was = s.clicked; s.setClicked(p);
+    const look = cam.position.clone().add(cam.getWorldDirection(cam.position.clone()).multiplyScalar(10)), side = cam.position.clone().set(1, 0, 0).applyQuaternion(cam.quaternion);
+    cam.lookAt(look.addScaledVector(side, 1.5));   // a turn of several degrees, as between two frames on a phone
+    s.updatePick();
+    const ring = document.getElementById('pick'), m = /translate\(([-\d.e]+)px, ([-\d.e]+)px\)/.exec(ring.style.transform);
+    cam.updateMatrixWorld(); const v = p.pos.clone().project(cam), want = [(v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight];
+    const r = { shown: !ring.hidden, at: m ? [+(+m[1]).toFixed(1), +(+m[2]).toFixed(1)] : null, want: want.map((x) => +x.toFixed(1)) };
+    r.off = m ? +Math.hypot(+m[1] - want[0], +m[2] - want[1]).toFixed(1) : null;
+    s.setClicked(was); s.updatePick(); return r;
+  });
+  ok('the ring round a clicked aircraft is centered on it, even just after the camera turns', ringOn.shown && ringOn.off !== null && ringOn.off < 2, JSON.stringify(ringOn));
   await page.evaluate(() => { const s = window.__sky; s.S.center = 'MID'; s.save(); s.applyCenter(false); });
   await page.keyboard.press('Escape'); await page.waitForTimeout(400);
   // ---------- version 3.9: realistic shapes ----------
