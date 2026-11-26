@@ -66,8 +66,10 @@ const { chromium } = require('playwright');
   const aria = await page.evaluate(() => ({ ad: document.getElementById('find-q').getAttribute('aria-activedescendant'), sel: document.querySelector('#find li[aria-selected=true]') && document.querySelector('#find li[aria-selected=true]').id }));
   ok('search exposes the active result', aria.ad === aria.sel && !!aria.ad, JSON.stringify(aria));
   // 5. stale aircraft chosen
-  await page.evaluate(() => { for (const p of window.__sky.planes.values()) if ((p.flight || '').startsWith('DAL')) p.tPos -= 200; });
-  await page.keyboard.press('Enter'); await page.waitForTimeout(500);
+  // the aircraft in the chosen row goes stale and Enter is pressed in the same moment, so a list refreshed in between (every two
+  // seconds), or a regional flying for Delta in the chosen row, cannot hand Enter a fresh aircraft instead
+  await page.evaluate(() => { const s = window.__sky, p = s.findPick; if (p) p.tPos -= 200; document.getElementById('find-q').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); });
+  await page.waitForTimeout(500);
   ok('stale aircraft: no lock, search stays open', await page.evaluate(() => !window.__sky.shot.lock && !document.getElementById('find').hidden), await page.evaluate(() => document.getElementById('find-note').textContent.slice(0, 50)));
   await page.keyboard.press('Escape');
   // 6 short screen
@@ -394,16 +396,42 @@ const { chromium } = require('playwright');
     const after = await page.evaluate(() => { const s = window.__sky; return { center: s.S.center, other: s.S.other, clicked: !!s.clicked }; });
     ok('a click on an airport code label centers the sky on that airport', (after.center === spot.code || (after.center === 'OTHER' && after.other === spot.code)) && !after.clicked, JSON.stringify({ spot, after }));
   }
-  // an aircraft right under the pointer still gets the click, even where a label is close by
-  await page.waitForTimeout(8000);
+  // an aircraft right under the pointer still gets the click, even where a label is close by.
+  // The label click above moved the sky to that airport, which can be far away with few aircraft, and the move takes a while,
+  // so bring the sky back to the middle of the antenna's area and wait until an aircraft is well inside the picture (November 26:
+  // after a click on KALB the two checks below found no aircraft at all)
+  await page.evaluate(() => { const s = window.__sky; s.S.center = 'MID'; s.applyCenter(false); s.goWide(); });
+  const inView = await page.waitForFunction(() => {
+    const s = window.__sky, cam = s.camera; cam.updateMatrixWorld();
+    return [...s.planes.values()].some((q) => { if (q.lat === null || q.opacity < 0.5 || !q.fresh(performance.now() / 1000)) return false; const v = q.pos.clone().project(cam); return v.z < 1 && v.z > -1 && Math.abs(v.x) < 0.5 && Math.abs(v.y) < 0.5; });
+  }, null, { timeout: 45000, polling: 500 }).then(() => true, () => false);
+  if (!inView) ok('an aircraft is well inside the picture to click', false, JSON.stringify(await page.evaluate(() => { const s = window.__sky; return { center: s.S.center, owner: s.cameraOwner(), planes: s.planes.size }; })));
   const planeFirst = await page.evaluate(() => {
     const s = window.__sky, cam = s.camera, w = innerWidth, h = innerHeight, before = s.S.center + ':' + s.S.other; cam.updateMatrixWorld();
-    const p = [...s.planes.values()].find((q) => { if (q.lat === null || q.opacity < 0.5 || !q.fresh(performance.now() / 1000)) return false; const v = q.pos.clone().project(cam); return v.z < 1 && v.z > -1 && Math.abs(v.x) < 0.8 && Math.abs(v.y) < 0.8; });
+    const p = [...s.planes.values()].find((q) => { if (q.lat === null || q.opacity < 0.5 || !q.fresh(performance.now() / 1000)) return false; const v = q.pos.clone().project(cam); return v.z < 1 && v.z > -1 && Math.abs(v.x) < 0.5 && Math.abs(v.y) < 0.5; });
     if (!p) return { none: true };
     const v = p.pos.clone().project(cam); s.clickAt((v.x * 0.5 + 0.5) * w, (-v.y * 0.5 + 0.5) * h);
     return { got: s.clicked === p, same: before === s.S.center + ':' + s.S.other };
   });
   ok('a click right on an aircraft shows that aircraft and does not move the sky', planeFirst.got && planeFirst.same, JSON.stringify(planeFirst));
+  // the ring round a clicked aircraft sits on it even when the camera has just turned, as it does every frame while it moves.
+  // Within one frame the camera is moved and turned first and its matrices are brought up to date only when the frame is drawn,
+  // so the ring is placed here right after a turn that has not been drawn yet, the way a slow phone sees it (Chris, November 25)
+  const ringOn = await page.evaluate(() => {
+    const s = window.__sky, cam = s.camera; cam.updateMatrixWorld();
+    const p = [...s.planes.values()].find((q) => { if (q.lat === null || q.opacity < 0.5) return false; const v = q.pos.clone().project(cam); return v.z < 1 && v.z > -1 && Math.abs(v.x) < 0.5 && Math.abs(v.y) < 0.5; });
+    if (!p) return { none: true };
+    const was = s.clicked; s.setClicked(p);
+    const look = cam.position.clone().add(cam.getWorldDirection(cam.position.clone()).multiplyScalar(10)), side = cam.position.clone().set(1, 0, 0).applyQuaternion(cam.quaternion);
+    cam.lookAt(look.addScaledVector(side, 1.5));   // a turn of several degrees, as between two frames on a phone
+    s.updatePick();
+    const ring = document.getElementById('pick'), m = /translate\(([-\d.e]+)px, ([-\d.e]+)px\)/.exec(ring.style.transform);
+    cam.updateMatrixWorld(); const v = p.pos.clone().project(cam), want = [(v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight];
+    const r = { shown: !ring.hidden, at: m ? [+(+m[1]).toFixed(1), +(+m[2]).toFixed(1)] : null, want: want.map((x) => +x.toFixed(1)) };
+    r.off = m ? +Math.hypot(+m[1] - want[0], +m[2] - want[1]).toFixed(1) : null;
+    s.setClicked(was); s.updatePick(); return r;
+  });
+  ok('the ring round a clicked aircraft is centered on it, even just after the camera turns', ringOn.shown && ringOn.off !== null && ringOn.off < 2, JSON.stringify(ringOn));
   await page.evaluate(() => { const s = window.__sky; s.S.center = 'MID'; s.save(); s.applyCenter(false); });
   await page.keyboard.press('Escape'); await page.waitForTimeout(400);
   // ---------- version 3.9: realistic shapes ----------
@@ -567,10 +595,11 @@ const { chromium } = require('playwright');
   await ph.keyboard.press('Escape');
   const shut = await ph.evaluate(() => document.getElementById('photo').hidden);
   // the same aircraft under another identity: one with no photo, and one whose answer points somewhere other than Planespotters
-  const tryHex = (hex) => ph.evaluate(async (h) => { const s = window.__sky, p = s.capPlane, was = p.hex; p.hex = h; document.getElementById('photobtn').click();
+  // the registration is changed too (to one Planespotters has no photo of), since the page rightly asks by registration when the transponder code finds nothing
+  const tryHex = (hex) => ph.evaluate(async (h) => { const s = window.__sky, p = s.capPlane, was = p.hex, wasReg = p.reg, wasInfo = p.info && p.info.reg; p.hex = h; p.reg = 'N00000'; if (p.info) p.info.reg = 'N00000'; document.getElementById('photobtn').click();
     for (let i = 0; i < 40 && /Looking/.test(document.getElementById('photo-note').textContent); i++) await new Promise((r) => setTimeout(r, 250));
     const out = { note: document.getElementById('photo-note').textContent, credit: document.getElementById('photo-credit').hidden, src: document.getElementById('photo-img').getAttribute('src') };
-    document.getElementById('photo-close').click(); p.hex = was; return out; }, hex);
+    document.getElementById('photo-close').click(); p.hex = was; p.reg = wasReg; if (p.info) p.info.reg = wasInfo; return out; }, hex);
   const none = await tryHex('eeeee0'), evil = await tryHex('bad001');
   ok('Escape closes the photo, an aircraft with no photo says so, and a photo from anywhere but Planespotters is not shown', shut && /no photo/.test(none.note) && none.credit && !none.src && /no photo/.test(evil.note) && evil.credit && !evil.src, JSON.stringify({ shut, none, evil }));
   await ph.close();
@@ -587,15 +616,22 @@ const { chromium } = require('playwright');
   // the count in the corner: the antenna's own aircraft are counted at home, and not while the sky shown is far away
   const atHome = await rel.evaluate(() => document.getElementById('k-src').textContent);
   const hadHome = await rel.evaluate(() => { const s = window.__sky, had = s.home; if (!had) s.home = { lat: 41.16, lon: -73.13 }; s.S.center = 'OTHER'; s.S.other = 'KLAX'; s.applyCenter(false); return !!had; });   // a receiver in Connecticut, where the stand-in antenna is
-  await rel.waitForTimeout(3000);
+  // the corner is written every two seconds; on a busy computer that can take longer, so wait for it (up to 20 seconds)
+  await rel.waitForFunction(() => /far from here/.test(document.getElementById('k-src').textContent), null, { timeout: 20000 }).catch(() => {});
   const farAway = await rel.evaluate(() => document.getElementById('k-src').textContent);
+  const farWhy = await rel.evaluate(() => { const s = window.__sky, m = s.netCenter(); return { mid: [+m.lat.toFixed(2), +m.lon.toFixed(2)], home: s.home && [s.home.lat, s.home.lon], center: s.S.center + ' ' + s.S.other, follow: s.follow.state, owner: s.cameraOwner(), frames: s.frameN }; });
+  await rel.waitForTimeout(1000); farWhy.framesLater = await rel.evaluate(() => window.__sky.frameN);
   await rel.evaluate((had) => { const s = window.__sky; if (!had) s.home = null; s.S.center = 'MID'; s.S.other = ''; s.applyCenter(false); }, hadHome);
-  ok('the corner counts the antenna aircraft at home, and says the antenna is far away while the sky shown is somewhere else', / by /.test(atHome) && /far from here/.test(farAway) && !/ by /.test(farAway), JSON.stringify({ atHome, farAway }));
+  ok('the corner counts the antenna aircraft at home, and says the antenna is far away while the sky shown is somewhere else', / by /.test(atHome) && /far from here/.test(farAway) && !/ by /.test(farAway), JSON.stringify({ atHome, farAway, farWhy }));
   // a question to the flight network that is never answered is given up after 15 seconds, so the page asks again, and the corner
   // stops counting the network as answering; once the network answers again its aircraft come back
-  await rel.evaluate(() => fetch('/ctl/hangnet?on=1')); await rel.waitForTimeout(18000);
+  // the next question can start up to 5 seconds after the hang begins, then waits 15 seconds before it is given up, and a busy
+  // computer runs timers late, so wait for the give-up (up to 45 seconds) rather than a fixed time
+  await rel.evaluate(() => fetch('/ctl/hangnet?on=1'));
+  await rel.waitForFunction(() => window.__sky.net.fails >= 1 || window.__sky.net.i > 0, null, { timeout: 45000 }).catch(() => {});
   const netHang = await rel.evaluate(() => ({ fails: window.__sky.net.fails, busy: window.__sky.net.busy, i: window.__sky.net.i }));
-  await rel.evaluate(() => fetch('/ctl/hangnet?on=0')); await rel.waitForTimeout(8000);
+  await rel.evaluate(() => fetch('/ctl/hangnet?on=0'));
+  await rel.waitForFunction(() => window.__sky.net.fails === 0 && performance.now() / 1000 - window.__sky.net.lastGood < 8 && /[1-9]\d* more from the flight network/.test(document.getElementById('k-src').textContent), null, { timeout: 30000 }).catch(() => {});
   const netBack = await rel.evaluate(() => ({ answered: performance.now() / 1000 - window.__sky.net.lastGood < 8 || window.__sky.net.fails === 0, text: document.getElementById('k-src').textContent }));
   ok('a question to the flight network that never gets an answer is given up, and the network aircraft come back once it answers again', (netHang.fails >= 1 || netHang.i > 0) && netBack.answered && /[1-9]\d* more from the flight network/.test(netBack.text), JSON.stringify({ netHang, netBack }));
   await rel.close(); await page.bringToFront();
@@ -634,7 +670,7 @@ const { chromium } = require('playwright');
   await satBad.close();
   // a short outage after some photos loaded: the missing ones are asked for again, when switched off and on and a minute later by themselves
   const satSome = await browser.newPage({ viewport: { width: 960, height: 540 } }); satSome.on('pageerror', (e) => errs.push('PAGEERROR (satellite outage): ' + e.message));
-  await sim('/ctl/satsome?down=1'); await satSome.goto(PAGE + '&sat=1&satApi=/mock/satsome/{z}/{y}/{x}.png');
+  await sim('/ctl/satsome?down=1'); await satSome.goto(PAGE + '&sat=1&satApi=/mock/satsome/{z}/{y}/{x}.png', { waitUntil: 'domcontentloaded', timeout: 90000 }).catch((e) => errs.push('the satellite outage page took too long to open: ' + e.message.split('\n')[0]));
   await satSome.waitForFunction(() => { const g = window.__sky && window.__sky.sat; return g && g.loaded > 0 && !g.busy && !g.queue.length && [...g.cache.values()].some((t) => t.bad); }, null, { timeout: 45000 }).catch(() => {});
   const holes = () => satSome.evaluate(() => { const g = window.__sky.sat; return { loaded: g.loaded, failed: g.failed, asked: g.asked, down: g.down, holes: [...g.cache.values()].filter((t) => t.bad && g.want.has(t.k)).length }; });
   const part = await holes();
@@ -651,6 +687,7 @@ const { chromium } = require('playwright');
   // ---------- version 3.12.1: the tour waits after the viewer takes over, for the time in the settings ----------
   const hb = await browser.newPage({ viewport: { width: 960, height: 540 } }); hb.on('pageerror', (e) => errs.push('PAGEERROR (hand back): ' + e.message));
   await hb.goto(PAGE + '&handBack=60'); await planesIn(hb);
+  const townsAtStart = await hb.evaluate(() => window.__sky.towns === null && !window.__sky.follow.want);   // version 3.12.2: the place list is not read until a flight is followed
   const hbSet = await hb.evaluate(() => ({ S: window.__sky.S.handBack, sel: document.getElementById('f-handback').value, opts: [...document.getElementById('f-handback').options].map((o) => o.value).join(',') }));
   ok('the settings offer a minute, 3 minutes, 5 minutes or never, and show the chosen wait', hbSet.S === 60 && hbSet.sel === '60' && hbSet.opts === '60,180,300,0', JSON.stringify(hbSet));
   // a click on an aircraft while the tour runs holds the tour; once the wait is over (the clock is moved back here) it moves on again
@@ -715,6 +752,18 @@ const { chromium } = require('playwright');
   ok('Follow goes straight to the flight, from the tour, a locked aircraft or fly mode, without a stop at the center airport',
     fw.near && fw.near.kind === 'follow' && fw.near.same && !fw.near.jump && fw.near.owner === 'follow' && fw.fromLock === 'follow:follow' && fw.fromFly === 'follow:follow', JSON.stringify(fw));
   ok('a flight far away gets the same move as changing to a far airport', fw.far && fw.far.kind === 'follow' && fw.far.jump && fw.far.plane === 'f0f0f0', JSON.stringify(fw.far));
+  // ---------- version 3.12.2: the followed flight's caption says where it is ----------
+  const wh = await hb.evaluate(async () => {
+    const s = window.__sky, wait = (ms) => new Promise((res) => setTimeout(res, ms)), line = document.getElementById('c-where');
+    const p = [...s.planes.values()].find((q) => q.lat !== null && q.opacity > 0.5 && q.callsign() && !q.remote); if (!p) return { none: true };
+    s.setFollow(p.callsign()); for (let i = 0; i < 60 && (line.hidden || !document.getElementById('cap').classList.contains('on')); i++) await wait(250);
+    const r = { text: line.textContent, shown: !line.hidden, parsed: !!s.towns && s.towns.n };
+    s.S.captions = true; s.setFollow(''); await wait(800); r.afterStop = { hidden: line.hidden || !document.getElementById('cap').classList.contains('on') };
+    return r;
+  });
+  ok('the place list is read only once a flight is followed', townsAtStart && wh.parsed > 30000, JSON.stringify({ townsAtStart, parsed: wh.parsed }));
+  ok('a followed flight\'s caption says where it is, in nautical miles from a place', wh.shown && /^(Over [^,]+, .+|\d+ nm (N|NE|E|SE|S|SW|W|NW) of [^,]+, .+)$/.test(wh.text), JSON.stringify(wh));
+  ok('the line goes away when Follow stops', wh.afterStop && wh.afterStop.hidden, JSON.stringify(wh.afterStop));
   ok('a flight not found yet keeps the view where it is, then takes the camera when found', fw.looking && fw.looking.owner === 'lock' && fw.looking.held && fw.looking.lockedOn && fw.found.owner === 'follow' && fw.found.kind === 'follow' && fw.found.plane === 'f1f1f1' && !fw.found.held, JSON.stringify(fw));
   await hb.close();
   // the old fly-only setting carries over: Never stays Never, any other choice becomes 3 minutes

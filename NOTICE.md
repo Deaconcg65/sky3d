@@ -9,6 +9,7 @@ The built page `sky3d.html` and the files in `build/` also contain work by other
 - **Natural Earth** land, lakes and state lines, public domain. Used for the rest of the map and for the Hudson River.
 - **United States Census Bureau** cartographic boundary files, public domain. Used for state lines near New York.
 - **OurAirports** airports and runways, public domain. In `build/airports.json`.
+- **GeoNames** places (geonames.org), Creative Commons Attribution 4.0, by way of the all-the-cities package (MIT License). Used, cut down to about 38,000 places, for the line that says where a followed flight is. In `build/towns.txt`.
 
 At run time the page reads aircraft types, airline names and trail history from the tar1090 map page on the receiver, if it is there, and asks the adsb.im and api.adsb.lol services for routes and for the position of a followed flight.
 

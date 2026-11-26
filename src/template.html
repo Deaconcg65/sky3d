@@ -1,10 +1,10 @@
 <!doctype html>
 <!--
-  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3.12.1, /*EDITION*/.
+  3D sky: live aircraft from a readsb or dump1090 receiver, drawn in three dimensions. Version 3.12.2, /*EDITION*/.
   One self-contained page. Put it on the receiver's web server and open it in a browser.
   Includes three.js (c) 2010-2024 three.js authors, MIT License.
   Shorelines: GSHHG (Wessel and Smith, LGPL) and Natural Earth (public domain). State lines: United States Census Bureau.
-  Airports and runways: OurAirports (public domain). Weather: Open-Meteo.com (CC BY 4.0).<!--NET--> Flight network: ADSB.lol (ODbL). Place finder: OpenStreetMap Nominatim (data ODbL, (c) OpenStreetMap contributors).<!--/NET-->
+  Airports and runways: OurAirports (public domain). Places: GeoNames (CC BY 4.0). Weather: Open-Meteo.com (CC BY 4.0).<!--NET--> Flight network: ADSB.lol (ODbL). Place finder: OpenStreetMap Nominatim (data ODbL, (c) OpenStreetMap contributors).<!--/NET-->
 -->
 <html lang="en">
 <head>
@@ -29,6 +29,7 @@ body { cursor: none; } body.awake { cursor: default; }
 #c-route { font-size: 3.15vh; font-weight: 400; line-height: 1.25; }
 #c-route i { font-style: normal; font-size: 0.62em; font-weight: 600; color: var(--lamp); letter-spacing: 0.08em; margin-left: 0.25em; vertical-align: 0.14em; }
 #c-route span { color: var(--faint); margin: 0 0.35em; }
+#c-where { font-size: 2.05vh; color: var(--soft); margin-top: 0.7vh; }
 #c-data { font-size: 2.05vh; color: var(--soft); margin-top: 1.5vh; font-variant-numeric: tabular-nums; }
 #c-data b { font-weight: 400; margin-right: 2.2em; white-space: nowrap; display: inline-block; }
 #c-prog { margin-top: 2vh; width: min(46vw, 620px); height: 2px; background: var(--line); border-radius: 2px; }
@@ -145,6 +146,7 @@ body.shared #panel .home-only { display: none; }
   <div id="c-air"></div>
   <div id="c-flight"></div>
   <div id="c-route"></div>
+  <div id="c-where" hidden></div>
   <div id="c-data"></div>
   <div id="c-prog" hidden><div id="c-bar"></div></div>
   <div id="c-progtext" hidden></div>
@@ -251,7 +253,7 @@ body.shared #panel .home-only { display: none; }
   <form id="f-follow">
     <label for="f-flight">Follow one flight</label>
     <div class="row"><input id="f-flight" type="text" maxlength="9" placeholder="DL1234" autocomplete="off" spellcheck="false"><button type="submit">Follow</button><button id="f-stop" class="quiet" type="button" hidden>Stop</button></div>
-    <div class="note">Type a flight number such as DL1234 or a tail number such as N123AB. Beyond the antenna's reach its position comes from ADSB.lol.</div>
+    <div class="note">Type a flight number such as DL1234 or a tail number such as N123AB. Beyond the antenna's reach its position comes from ADSB.lol. Its caption says where it is, in nautical miles from the nearest places, from a list of places by <b>GeoNames</b> carried in this page.</div>
   </form>
   <form id="f-watch">
     <label for="f-wadd">Watch list</label>
@@ -301,10 +303,11 @@ body.shared #panel .home-only { display: none; }
 
   <hr>
   <dl id="keys-dl"></dl>
-  <p class="note" style="margin-top:22px">Version 3.12.1, /*EDITION*/, November 20, 2026</p>
+  <p class="note" style="margin-top:22px">Version 3.12.2, /*EDITION*/, November 23, 2026</p>
 </aside>
 <script type="application/json" id="geo-data">/*GEO*/</script>
 <script type="application/json" id="airport-data">/*AIRPORTS*/</script>
+<script type="text/plain" id="towns-data">/*TOWNS*/</script>
 <script>/*APP*/</script>
 </body>
 </html>

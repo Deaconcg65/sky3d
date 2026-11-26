@@ -154,6 +154,7 @@ Your own places ("My House" and the like) are never sent anywhere by name or by 
     npm install three@0.160.0 esbuild
     python3 tools/geo.py <folder of downloaded map data> build/geo.json <folder of GSHHG data>
     python3 tools/airports.py <folder of OurAirports csv files> build/airports.json
+    python3 -I tools/towns.py <cities.pbf from the all-the-cities package, see the top of tools/towns.py> build/towns.txt
     node tools/build.js
 
 `tools/build.js` writes both editions to `build/`. The switch between them is the `__NET__` value it sets.
@@ -164,6 +165,6 @@ To add or correct an airline's paint, edit the `LIVERY` table in `src/airlines.j
 
 ## Credits
 
-three.js (MIT). Shorelines from GSHHG (Wessel and Smith, LGPL) and Natural Earth (public domain). State lines from the United States Census Bureau. Airports and runways from OurAirports (public domain). Weather data by Open-Meteo.com (CC BY 4.0). Flight network data by ADSB.lol (ODbL), a community network of volunteer receivers. Aircraft types, airline names and trail history come from the tar1090 map page already on the receiver.
+three.js (MIT). Shorelines from GSHHG (Wessel and Smith, LGPL) and Natural Earth (public domain). State lines from the United States Census Bureau. Airports and runways from OurAirports (public domain). Places from GeoNames (CC BY 4.0). Weather data by Open-Meteo.com (CC BY 4.0). Flight network data by ADSB.lol (ODbL), a community network of volunteer receivers. Aircraft types, airline names and trail history come from the tar1090 map page already on the receiver.
 
 No support is promised. Use it, change it, share it.
