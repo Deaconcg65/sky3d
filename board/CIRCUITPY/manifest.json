@@ -1,0 +1,75 @@
+{
+ "board": "skypuppy3d LED flight board",
+ "files": {
+  "lib/adafruit_connection_manager.py": {
+   "sha": "03a11060a5a6e877a3bd32185432ffa7ae7b155d1ea26a0b19f84e24f6f18cc8",
+   "sha1": "d0d345fe789774dda5afa8394b2f28eee3e6eb3c",
+   "size": 13588
+  },
+  "lib/adafruit_display_text/__init__.py": {
+   "sha": "f97d837f5e5a5d820afda2254e62ffd009db61fa42e17ec222810905e3496526",
+   "sha1": "e565e10d6f54c31a9e283201e39fca9d385c5c3e",
+   "size": 18788
+  },
+  "lib/adafruit_display_text/label.py": {
+   "sha": "c2d622a6648eaa50fb83f3066c06af77383afd0edc9904015b8e07f60309b59c",
+   "sha1": "9a458f5115f83d7e4e05828a7929322fb00e3f53",
+   "size": 16936
+  },
+  "lib/adafruit_requests.py": {
+   "sha": "a9344acde0d00a20d12a07bed2778c3bc17fc4423248fa4ba997d525c05afce6",
+   "sha1": "2a92402726c510ad868cb4f73b397c4010f747f9",
+   "size": 27400
+  },
+  "lib/licenses.txt": {
+   "sha": "6760e2db812bfbd1dc487d0deab24b5f1d17d10c57f7a378ada042c7bef9898e",
+   "sha1": "3a47543a948768b1fe49332ad241ef2cc98f73d8",
+   "size": 3460
+  },
+  "sky/__init__.py": {
+   "sha": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+   "size": 0
+  },
+  "sky/app.py": {
+   "sha": "a2d961018556ce7691ddffff95f6ad989281e3dbfb2b868fac2f5863d165d43f",
+   "sha1": "f5fa21889def83d9e805441480a804157871f898",
+   "size": 5025
+  },
+  "sky/logic.py": {
+   "sha": "157a2cea9b01c77c1ef84ba229685d82e100dd11ae68b511bc43c0eb05415f4e",
+   "sha1": "a7d15c0301a62400c35d998a04fed42379f07a18",
+   "size": 22970
+  },
+  "sky/net.py": {
+   "sha": "e655deb8501d703bf13945b67061c006d20234cb3b5b32738c4fbc68b4350963",
+   "sha1": "09e1fc2610fad0f97eb20ee9392a60345f628864",
+   "size": 11350
+  },
+  "sky/screen.py": {
+   "sha": "ada83159bed6d251c0dbe2482a80e117d44a56aaae0b9ec70f433f8a1d7009d5",
+   "sha1": "0a34cf8cd068276eac1bd3521c983ac9e1afccd7",
+   "size": 2413
+  },
+  "sky/setup.py": {
+   "sha": "d702460ec14d5c03c8dd494f53a448ddc2b94a931e9a07d2380490c18e9a4b59",
+   "sha1": "04df248c656961c9fcd6cc594aeaca1cef432277",
+   "size": 2805
+  },
+  "sky/store.py": {
+   "sha": "d62e80e766be118e39bec6e5c2e431ecf5d9ce2dbec3340f1ab84542133ead88",
+   "sha1": "61078a5949c9622098e680abeb6098f4f23741ab",
+   "size": 4424
+  },
+  "sky/web.py": {
+   "sha": "499636efa9dc066980c788cf0108549c9611fead1455fea73ab97fafc36a83fb",
+   "sha1": "2590bdfc5ff3223b558722705295f2d3bc938b24",
+   "size": 7572
+  },
+  "zips.bin": {
+   "sha": "a234a43c5baadd5afd7013297391136cd8920e40bb74fb7b588d4a3464c9d19f",
+   "sha1": "9beca147f7cd9a0fd1c3e1c06cc14c7c2f4dd5ab",
+   "size": 304119
+  }
+ }
+}
