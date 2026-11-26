@@ -396,11 +396,19 @@ const { chromium } = require('playwright');
     const after = await page.evaluate(() => { const s = window.__sky; return { center: s.S.center, other: s.S.other, clicked: !!s.clicked }; });
     ok('a click on an airport code label centers the sky on that airport', (after.center === spot.code || (after.center === 'OTHER' && after.other === spot.code)) && !after.clicked, JSON.stringify({ spot, after }));
   }
-  // an aircraft right under the pointer still gets the click, even where a label is close by
-  await page.waitForTimeout(8000);
+  // an aircraft right under the pointer still gets the click, even where a label is close by.
+  // The label click above moved the sky to that airport, which can be far away with few aircraft, and the move takes a while,
+  // so bring the sky back to the middle of the antenna's area and wait until an aircraft is well inside the picture (November 26:
+  // after a click on KALB the two checks below found no aircraft at all)
+  await page.evaluate(() => { const s = window.__sky; s.S.center = 'MID'; s.applyCenter(false); s.goWide(); });
+  const inView = await page.waitForFunction(() => {
+    const s = window.__sky, cam = s.camera; cam.updateMatrixWorld();
+    return [...s.planes.values()].some((q) => { if (q.lat === null || q.opacity < 0.5 || !q.fresh(performance.now() / 1000)) return false; const v = q.pos.clone().project(cam); return v.z < 1 && v.z > -1 && Math.abs(v.x) < 0.5 && Math.abs(v.y) < 0.5; });
+  }, null, { timeout: 45000, polling: 500 }).then(() => true, () => false);
+  if (!inView) ok('an aircraft is well inside the picture to click', false, JSON.stringify(await page.evaluate(() => { const s = window.__sky; return { center: s.S.center, owner: s.cameraOwner(), planes: s.planes.size }; })));
   const planeFirst = await page.evaluate(() => {
     const s = window.__sky, cam = s.camera, w = innerWidth, h = innerHeight, before = s.S.center + ':' + s.S.other; cam.updateMatrixWorld();
-    const p = [...s.planes.values()].find((q) => { if (q.lat === null || q.opacity < 0.5 || !q.fresh(performance.now() / 1000)) return false; const v = q.pos.clone().project(cam); return v.z < 1 && v.z > -1 && Math.abs(v.x) < 0.8 && Math.abs(v.y) < 0.8; });
+    const p = [...s.planes.values()].find((q) => { if (q.lat === null || q.opacity < 0.5 || !q.fresh(performance.now() / 1000)) return false; const v = q.pos.clone().project(cam); return v.z < 1 && v.z > -1 && Math.abs(v.x) < 0.5 && Math.abs(v.y) < 0.5; });
     if (!p) return { none: true };
     const v = p.pos.clone().project(cam); s.clickAt((v.x * 0.5 + 0.5) * w, (-v.y * 0.5 + 0.5) * h);
     return { got: s.clicked === p, same: before === s.S.center + ':' + s.S.other };
